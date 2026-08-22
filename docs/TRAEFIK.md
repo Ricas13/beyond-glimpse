@@ -64,6 +64,8 @@ It is fine to use ordinary Traefik routing/TLS middleware in front of it. If you
 
 Either let Beyond Glimpse own its CSP or make sure the Traefik CSP is compatible with the policy in `config/nginx.conf`.
 
+`Strict-Transport-Security` (HSTS) is best added at Traefik rather than Nginx, because Traefik is the component that actually terminates HTTPS. The internal Nginx hop is intentionally plain HTTP on the private Docker network.
+
 ## Sync status
 
 Detailed sync telemetry stays private under the persistent state volume:
