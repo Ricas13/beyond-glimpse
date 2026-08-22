@@ -2,6 +2,17 @@
 
 All notable Beyond Glimpse changes are documented here.
 
+## 1.0.1 — 2026-08-22
+
+Production resilience fix for very large Jellyfin libraries.
+
+- Full rich-metadata catalogue builds now start at 100 items per request by default instead of using the 500-item incremental page size.
+- Rich metadata requests automatically halve their page size after a Jellyfin read timeout and retry the same offset without losing progress.
+- HTTP read timeouts are no longer retried three times with the same oversized request; connect/status-code retries remain enabled.
+- `FULL_SYNC_PAGE_SIZE` is now configurable separately from `PAGE_SIZE`.
+- Incremental changed-metadata requests retain the existing large page size for efficiency.
+- ID-only periodic reconciliation remains unchanged at its large lightweight inventory page size.
+
 ## 1.0.0 — 2026-08-22
 
 First production release of the Beyond Glimpse fork.
