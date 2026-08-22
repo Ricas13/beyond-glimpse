@@ -1,6 +1,6 @@
-// Beyond Glimpse large-library renderer.
+// Beyond Glimpse large-library renderer and public metadata hardening.
 // Loaded after the upstream inline application so we can replace its expensive
-// all-at-once DOM rendering without rewriting the original UI in one step.
+// and metadata-unsafe hot paths without rewriting the original UI in one step.
 
 (() => {
     const DEFAULT_BATCH_SIZE = 96;
@@ -37,9 +37,117 @@
             help = '';
         }
 
-        // textContent deliberately avoids interpreting metadata/search input as HTML.
         messageElem.textContent = message;
         helpElem.textContent = help;
+    }
+
+    function safeTextPlaceholder(container, title, large = false) {
+        const placeholder = document.createElement('div');
+        placeholder.className = large ? 'text-placeholder large' : 'text-placeholder';
+        const name = document.createElement('div');
+        name.className = 'media-name';
+        name.textContent = title || '';
+        placeholder.appendChild(name);
+        container.appendChild(placeholder);
+        return placeholder;
+    }
+
+    function renderGenreButton(button, genre) {
+        const icon = document.createElement('span');
+        icon.className = 'sort-icon';
+
+        if (!genre || genre === 'all') {
+            icon.textContent = '🏷️ Genre';
+            button.replaceChildren(icon);
+            button.classList.remove('active');
+            return;
+        }
+
+        if (button.id === 'mobile-genre-button') {
+            icon.textContent = `🏷️ ${genre}`;
+        } else {
+            icon.append('🏷️ ');
+            const selected = document.createElement('span');
+            selected.className = 'selected-genre';
+            selected.textContent = genre;
+            icon.appendChild(selected);
+        }
+        button.replaceChildren(icon);
+        button.classList.add('active');
+    }
+
+    function createGenreItem(genre, count, active) {
+        const item = document.createElement('div');
+        item.className = `genre-item ${active ? 'active' : ''}`.trim();
+        item.dataset.genre = genre;
+        item.append(genre === 'all' ? 'All Genres' : genre);
+        if (genre !== 'all') {
+            const badge = document.createElement('span');
+            badge.className = 'genre-badge';
+            badge.textContent = String(count);
+            item.append(' ', badge);
+        }
+        return item;
+    }
+
+    function safeSetGenreFilter(genre) {
+        currentGenre = genre;
+
+        document.querySelectorAll('.genre-item').forEach(item => {
+            item.classList.toggle('active', item.dataset.genre === genre);
+        });
+
+        document.querySelectorAll('.genre-button').forEach(button => renderGenreButton(button, genre));
+        document.body.classList.toggle('sort-by-genre', genre !== 'all');
+
+        document.querySelectorAll('.sort-button').forEach(btn => {
+            if (btn.dataset.sort === currentSortMethod) {
+                btn.classList.add('active');
+            } else if (!btn.classList.contains('genre-button')) {
+                btn.classList.remove('active');
+            }
+        });
+
+        const currentSearchTerm = document.querySelector('.search-input').value.toLowerCase();
+        filterAndSortMedia(currentSearchTerm);
+        closeGenreDrawer();
+    }
+
+    function safeUpdateGenreDropdown(type) {
+        const genres = allGenres[type];
+        document.querySelectorAll('.genre-menu').forEach(dropdown => {
+            dropdown.replaceChildren(createGenreItem('all', 0, currentGenre === 'all'));
+            Object.entries(genres).forEach(([genre, count]) => {
+                dropdown.appendChild(createGenreItem(genre, count, currentGenre === genre));
+            });
+        });
+
+        document.querySelectorAll('.genre-menu .genre-item').forEach(item => {
+            item.addEventListener('click', () => {
+                setGenreFilter(item.dataset.genre);
+                document.querySelectorAll('.genre-menu').forEach(menu => menu.classList.remove('show'));
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+            });
+        });
+
+        document.querySelectorAll('.genre-button').forEach(button => renderGenreButton(button, currentGenre));
+    }
+
+    function safeUpdateGenreDrawer(type) {
+        const genres = allGenres[type];
+        const drawerContent = document.querySelector('.genre-drawer-content');
+        drawerContent.replaceChildren(createGenreItem('all', 0, currentGenre === 'all'));
+
+        Object.entries(genres).forEach(([genre, count]) => {
+            drawerContent.appendChild(createGenreItem(genre, count, currentGenre === genre));
+        });
+
+        document.querySelector('.genre-drawer-title').textContent =
+            `${type === 'movies' ? 'Movie' : 'TV Show'} Genres`;
+
+        document.querySelectorAll('.genre-drawer-content .genre-item').forEach(item => {
+            item.addEventListener('click', () => setGenreFilter(item.dataset.genre));
+        });
     }
 
     function createMediaCard(item, type, index) {
@@ -214,11 +322,166 @@
         filterTimer = setTimeout(() => runFilterAndSort(searchTerm), SEARCH_DEBOUNCE_MS);
     }
 
-    // Replace the upstream hot paths. Existing tab/sort/search handlers resolve
-    // these function bindings when they run, so no duplicate listeners are needed.
+    function appendEmptyMessage(container, message) {
+        const empty = document.createElement('div');
+        empty.textContent = message;
+        container.appendChild(empty);
+    }
+
+    function safeOpenModal(item, type) {
+        const posterPath = type === 'movies'
+            ? `data/posters/movies/${item.id}.jpg`
+            : `data/posters/tvshows/${item.id}.jpg`;
+        const posterContainer = document.querySelector('.modal-poster');
+        posterContainer.replaceChildren();
+
+        const posterImg = document.createElement('img');
+        posterImg.src = posterPath;
+        posterImg.alt = item.title || '';
+        posterContainer.appendChild(posterImg);
+        posterImg.onerror = function () {
+            this.remove();
+            safeTextPlaceholder(posterContainer, item.title, true);
+        };
+
+        const backdropPath = type === 'movies'
+            ? `data/backdrops/movies/${item.id}.jpg`
+            : `data/backdrops/tvshows/${item.id}.jpg`;
+        const backdropElement = document.querySelector('.modal-backdrop');
+        backdropElement.replaceChildren();
+        backdropElement.style.backgroundImage = `url("${backdropPath}")`;
+
+        const testImage = new Image();
+        testImage.onerror = function () {
+            backdropElement.style.backgroundImage = 'none';
+            const backdropPlaceholder = document.createElement('div');
+            backdropPlaceholder.className = 'backdrop-text-placeholder';
+            backdropPlaceholder.textContent = type === 'movies' ? 'Movie' : 'TV Show';
+            backdropElement.replaceChildren(backdropPlaceholder);
+        };
+        testImage.src = backdropPath;
+
+        document.querySelector('.modal-title').textContent = item.title || '';
+        document.querySelector('.modal-year').textContent = item.year || '';
+
+        const ratingElem = document.getElementById('modal-rating');
+        const durationElem = document.getElementById('modal-duration');
+        if (item.contentRating) {
+            ratingElem.textContent = item.contentRating;
+            ratingElem.style.display = 'block';
+        } else {
+            ratingElem.style.display = 'none';
+        }
+
+        let seasonsElem = document.getElementById('modal-seasons');
+        let episodesElem = document.getElementById('modal-episodes');
+
+        if (type === 'movies' && item.duration) {
+            durationElem.textContent = `${Math.floor(item.duration / 60000)} min`;
+            durationElem.style.display = 'block';
+            if (seasonsElem) seasonsElem.style.display = 'none';
+            if (episodesElem) episodesElem.style.display = 'none';
+        } else if (type === 'tvshows') {
+            if (!seasonsElem) {
+                seasonsElem = document.createElement('div');
+                seasonsElem.className = 'metadata-item';
+                seasonsElem.id = 'modal-seasons';
+                durationElem.parentNode.insertBefore(seasonsElem, durationElem);
+            }
+            if (!episodesElem) {
+                episodesElem = document.createElement('div');
+                episodesElem.className = 'metadata-item';
+                episodesElem.id = 'modal-episodes';
+                seasonsElem.parentNode.insertBefore(episodesElem, seasonsElem.nextSibling);
+            }
+            durationElem.style.display = 'none';
+            seasonsElem.textContent = item.childCount
+                ? `${item.childCount} ${item.childCount === 1 ? 'season' : 'seasons'}`
+                : '';
+            seasonsElem.style.display = item.childCount ? 'block' : 'none';
+            episodesElem.textContent = item.leafCount
+                ? `${item.leafCount} ${item.leafCount === 1 ? 'episode' : 'episodes'}`
+                : '';
+            episodesElem.style.display = item.leafCount ? 'block' : 'none';
+        } else {
+            durationElem.style.display = 'none';
+            if (seasonsElem) seasonsElem.style.display = 'none';
+            if (episodesElem) episodesElem.style.display = 'none';
+        }
+
+        document.getElementById('modal-summary').textContent = item.summary || 'No summary available.';
+
+        const genresContainer = document.getElementById('modal-genres');
+        genresContainer.replaceChildren();
+        if (item.genres && item.genres.length > 0) {
+            item.genres.forEach(genre => {
+                const genreElement = document.createElement('div');
+                genreElement.className = 'genre-tag';
+                genreElement.textContent = genre;
+                genreElement.addEventListener('click', () => {
+                    setGenreFilter(genre);
+                    closeModal();
+                });
+                genresContainer.appendChild(genreElement);
+            });
+        } else {
+            appendEmptyMessage(genresContainer, 'No genres available');
+        }
+
+        const castContainer = document.getElementById('modal-cast');
+        castContainer.replaceChildren();
+        if (item.actors && item.actors.length > 0) {
+            item.actors.forEach(actor => {
+                const actorElement = document.createElement('div');
+                actorElement.className = 'cast-item';
+                const name = document.createElement('div');
+                name.className = 'cast-name';
+                name.textContent = actor.name || '';
+                const role = document.createElement('div');
+                role.className = 'cast-role';
+                role.textContent = actor.role || '';
+                actorElement.append(name, role);
+                castContainer.appendChild(actorElement);
+            });
+        } else {
+            appendEmptyMessage(castContainer, 'No cast information available');
+        }
+
+        const dateAdded = item.addedAt ? formatDate(item.addedAt) : '';
+        let dateAddedElem = document.getElementById('modal-added-date');
+        if (!dateAddedElem) {
+            const dateSection = document.createElement('div');
+            dateSection.className = 'modal-section date-section';
+            const heading = document.createElement('div');
+            heading.className = 'modal-section-title';
+            heading.textContent = 'Date Added';
+            dateAddedElem = document.createElement('div');
+            dateAddedElem.id = 'modal-added-date';
+            dateSection.append(heading, dateAddedElem);
+            document.querySelector('.modal-body').appendChild(dateSection);
+        }
+        dateAddedElem.textContent = dateAdded;
+
+        const modalBody = document.querySelector('.modal-body');
+        modalBody.scrollTop = 0;
+        document.body.style.overflow = 'hidden';
+        modalOverlay.classList.add('active');
+        requestAnimationFrame(() => {
+            modalBody.scrollTop = 0;
+        });
+    }
+
+    // Replace upstream paths that either scale poorly or interpolate media metadata
+    // through innerHTML. Existing listeners resolve these bindings when invoked.
+    createTextPlaceholder = (container, title) => safeTextPlaceholder(container, title);
+    setGenreFilter = safeSetGenreFilter;
+    updateGenreDropdown = safeUpdateGenreDropdown;
+    updateGenreDrawer = safeUpdateGenreDrawer;
     displayMedia = largeLibraryDisplayMedia;
     filterAndSortMedia = largeLibraryFilterAndSortMedia;
+    openModal = safeOpenModal;
 
     window.__beyondGlimpseLargeLibraryReady = true;
+    window.__beyondGlimpseMetadataSafe = true;
     window.dispatchEvent(new Event('beyond-glimpse:ready'));
 })();
