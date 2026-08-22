@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 
-import hashlib
 import json
-from pathlib import Path
 
 import jellyfin_data_fetcher as base
 
@@ -25,7 +23,7 @@ def shard_key(item_id):
     value = str(item_id or "").lower()
     if len(value) >= 2 and all(ch in "0123456789abcdef" for ch in value[:2]):
         return value[:2]
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:2]
+    return "zz"
 
 
 def ultralight_build_catalog_entry(self, item, media_type, library_id):
