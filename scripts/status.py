@@ -46,14 +46,21 @@ def file_size(path: Path):
         return 0
 
 
-def collect(server, data_root=Path("/app/data"), state_root=Path("/app/state")):
+def collect(
+    server,
+    data_root=Path("/app/data"),
+    state_root=Path("/app/state"),
+    proxy_cache_root=Path("/var/cache/nginx/posters"),
+):
     data_dir = data_root / server
     state_dir = state_root / server
     status = read_json(state_dir / "sync-status.json")
 
     poster_files, poster_bytes = tree_stats(data_dir / "posters")
     backdrop_files, backdrop_bytes = tree_stats(data_dir / "backdrops")
+    detail_files, detail_bytes = tree_stats(data_dir / "details")
     state_files, state_bytes = tree_stats(state_dir)
+    proxy_files, proxy_bytes = tree_stats(proxy_cache_root) if server == "jellyfin" else (0, 0)
     movies_json_bytes = file_size(data_dir / "movies.json")
     tvshows_json_bytes = file_size(data_dir / "tvshows.json")
 
@@ -63,15 +70,21 @@ def collect(server, data_root=Path("/app/data"), state_root=Path("/app/state")):
             "server": server,
             "posterFiles": poster_files,
             "posterBytes": poster_bytes,
+            "posterProxyCacheFiles": proxy_files,
+            "posterProxyCacheBytes": proxy_bytes,
+            "posterProxyCacheLimitBytes": 256 * 1024 * 1024 if server == "jellyfin" else 0,
             "backdropFiles": backdrop_files,
             "backdropBytes": backdrop_bytes,
+            "detailFiles": detail_files,
+            "detailBytes": detail_bytes,
             "stateFiles": state_files,
             "stateBytes": state_bytes,
             "moviesJsonBytes": movies_json_bytes,
             "tvShowsJsonBytes": tvshows_json_bytes,
-            "publicBytes": poster_bytes + backdrop_bytes + movies_json_bytes + tvshows_json_bytes,
+            "publicBytes": poster_bytes + backdrop_bytes + detail_bytes + movies_json_bytes + tvshows_json_bytes,
         }
     )
+    result["totalAppStorageBytes"] = result["publicBytes"] + state_bytes + proxy_bytes
     return result
 
 
@@ -89,13 +102,25 @@ def print_text(data):
         print(f"Last full reconcile: {data['lastFullReconcile']}")
     if data.get("watermark"):
         print(f"Watermark: {data['watermark']}")
+
+    index_bytes = (data.get("moviesJsonBytes") or 0) + (data.get("tvShowsJsonBytes") or 0)
     print(
         "Storage: "
-        f"posters {human_bytes(data.get('posterBytes'))} ({data.get('posterFiles', 0):,} files) | "
-        f"backdrops {human_bytes(data.get('backdropBytes'))} ({data.get('backdropFiles', 0):,} files) | "
-        f"catalogue JSON {human_bytes((data.get('moviesJsonBytes') or 0) + (data.get('tvShowsJsonBytes') or 0))} | "
+        f"indexes {human_bytes(index_bytes)} | "
+        f"details {human_bytes(data.get('detailBytes'))} ({data.get('detailFiles', 0):,} shards) | "
+        f"local posters {human_bytes(data.get('posterBytes'))} | "
+        f"backdrops {human_bytes(data.get('backdropBytes'))} | "
         f"state {human_bytes(data.get('stateBytes'))}"
     )
+    if data.get("posterProxyCacheLimitBytes"):
+        print(
+            "Poster proxy cache: "
+            f"{human_bytes(data.get('posterProxyCacheBytes'))} / "
+            f"{human_bytes(data.get('posterProxyCacheLimitBytes'))} "
+            f"({data.get('posterProxyCacheFiles', 0):,} cached files)"
+        )
+    print(f"Total app storage: {human_bytes(data.get('totalAppStorageBytes'))}")
+
     if data.get("state") == "failed":
         print(f"Exit code: {data.get('exitCode')}")
         for line in data.get("lastOutput") or []:

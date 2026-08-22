@@ -1,3 +1,4 @@
+import re
 import unittest
 from pathlib import Path
 
@@ -37,10 +38,16 @@ class PublicWebSecurityTests(unittest.TestCase):
 
     def test_static_cache_location_does_not_shadow_security_headers(self):
         nginx = (ROOT / "config" / "nginx.conf").read_text(encoding="utf-8")
-        static_block = nginx.split("# Set caching for static assets", 1)[1].split("# Never serve", 1)[0]
+        match = re.search(
+            r"location\s+~\*\s+\\\.\(jpg\|jpeg\|png\|gif\|ico\|css\|js\)\$\s*\{(?P<body>.*?)\n\s*\}",
+            nginx,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(match)
+        body = match.group("body")
         directives = [
             line.strip()
-            for line in static_block.splitlines()
+            for line in body.splitlines()
             if line.strip() and not line.lstrip().startswith("#")
         ]
         self.assertIn("expires 7d;", directives)

@@ -6,7 +6,7 @@ The request path is:
 
 `client -> Traefik (HTTPS/TLS) -> Beyond Glimpse Nginx (HTTP port 80)`
 
-Nginx is not a second reverse proxy in this layout; it is the lightweight static web server inside the Beyond Glimpse container. Traefik handles public routing and TLS.
+Nginx is not a second public reverse proxy in this layout; it is the lightweight static web server inside the Beyond Glimpse container. Traefik handles public routing and TLS.
 
 ## Quick deployment
 
@@ -35,6 +35,48 @@ Nginx is not a second reverse proxy in this layout; it is the lightweight static
 
 The Traefik compose does **not** publish port 9090 or port 80 on the host. Traefik reaches the container on the shared Docker network.
 
+## Ultra-light Jellyfin poster path
+
+Jellyfin posters are not bulk-downloaded during sync. The browser requests a tag-versioned URL such as:
+
+```text
+/poster/<jellyfin-item-id>/<image-tag>.jpg
+```
+
+The internal Nginx server fetches that poster from Jellyfin only when it is actually needed and caches the resized result locally.
+
+Defaults:
+
+- poster width: 320 px;
+- JPEG quality: 72;
+- Nginx poster cache maximum: **256 MiB**;
+- inactive cached posters expire after 30 days;
+- the cache is ephemeral container storage, not part of persistent `/app/data`.
+
+The image tag is part of the public poster URL and the Nginx cache key, so when Jellyfin changes an image the URL changes automatically rather than requiring a cache purge.
+
+You can tune the requested poster dimensions in `.env`:
+
+```text
+POSTER_PROXY_MAX_WIDTH=320
+POSTER_PROXY_QUALITY=72
+```
+
+The hard cache ceiling is intentionally kept in `config/nginx.conf` so a deployment cannot accidentally grow an unbounded artwork store.
+
+## Catalogue payload model
+
+For Jellyfin, `movies.json` and `tvshows.json` are compact browse/search indexes. They contain only the fields required to render and filter the grid.
+
+Modal-only metadata is stored in deterministic static shards under:
+
+```text
+/data/jellyfin/details/movies/
+/data/jellyfin/details/tvshows/
+```
+
+The browser downloads a detail shard only when a title is opened. This avoids sending every synopsis, actor and modal field to every visitor during page startup.
+
 ## Health checks
 
 Beyond Glimpse exposes:
@@ -45,10 +87,7 @@ GET /healthz
 
 which returns a small non-sensitive JSON response when the internal Nginx server is alive.
 
-The Docker image has a native `HEALTHCHECK`, and the Traefik service definition also checks `/healthz`. This gives two useful signals:
-
-- Docker reports the container as healthy/unhealthy.
-- Traefik does not route to an unhealthy Beyond Glimpse backend.
+The Docker image has a native `HEALTHCHECK`, and the Traefik service definition also checks `/healthz`.
 
 During the first large-library import, Nginx may not start until the initial sync has completed. The container can therefore appear unready during that first import and will automatically become healthy when the web server starts.
 
@@ -66,15 +105,13 @@ Either let Beyond Glimpse own its CSP or make sure the Traefik CSP is compatible
 
 `Strict-Transport-Security` (HSTS) is best added at Traefik rather than Nginx, because Traefik is the component that actually terminates HTTPS. The internal Nginx hop is intentionally plain HTTP on the private Docker network.
 
-## Sync status
+## Sync and storage status
 
 Detailed sync telemetry stays private under the persistent state volume:
 
 ```text
 /app/state/jellyfin/sync-status.json
 ```
-
-It deliberately is not exposed through Nginx.
 
 For a human-readable summary:
 
@@ -93,13 +130,15 @@ docker compose -f docker-compose.traefik.yml exec beyond-glimpse \
 The status command reports:
 
 - last sync state and mode;
-- duration;
-- full vs incremental reason;
-- changed catalogue record count when available;
+- duration and changed-record count;
 - movie and TV-show counts;
 - incremental watermark and last full reconciliation;
-- poster/backdrop file counts and storage;
+- compact index size;
+- detail-shard count and size;
+- local poster/backdrop storage;
+- Nginx poster proxy cache usage against its 256 MiB ceiling;
 - private state storage;
+- total Beyond Glimpse application storage;
 - recent failure output when a sync fails.
 
 Every wrapped sync also emits one single-line `[SYNC SUMMARY]` JSON record to the container/cron log for log collectors.
