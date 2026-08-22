@@ -195,8 +195,9 @@ def fetch_library_ids(self, user_id, library_id, media_type):
             break
         all_ids.extend(str(item["Id"]) for item in items if item.get("Id"))
         start_index += len(items)
-        if len(items) < page_size:
-            break
+        # Do not stop merely because Jellyfin returned fewer rows than requested:
+        # servers may cap page sizes below our 2,000-ID preference. The next empty
+        # page is the reliable end-of-inventory signal.
 
     return all_ids
 
