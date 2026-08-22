@@ -22,7 +22,11 @@ initial_sync = load_module("initial_sync", "scripts/initial_sync.py")
 
 class ProductionReadinessTests(unittest.TestCase):
     def test_version_and_dependency_are_pinned(self):
-        self.assertEqual((ROOT / "VERSION").read_text(encoding="utf-8").strip(), "1.0.0")
+        version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+        self.assertRegex(version, r"^\d+\.\d+\.\d+$")
+        ultralight = (ROOT / "scripts" / "ultralight_jellyfin.py").read_text(encoding="utf-8")
+        self.assertIn(f'base.APP_VERSION = "{version}"', ultralight)
+
         requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8").splitlines()
         self.assertEqual(requirements, ["requests==2.34.2"])
         dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")

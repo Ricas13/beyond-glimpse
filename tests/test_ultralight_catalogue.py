@@ -17,6 +17,53 @@ import configure_poster_proxy as proxy  # noqa: E402
 
 
 class UltraLightCatalogueTests(unittest.TestCase):
+    def test_rich_session_does_not_repeat_read_timeouts(self):
+        fake = SimpleNamespace(server_type="jellyfin", jellyfin_token="secret")
+        session = ultra.ultralight_build_session(fake)
+        self.assertEqual(session.get_adapter("https://").max_retries.read, 0)
+        self.assertEqual(session.get_adapter("https://").max_retries.connect, 3)
+
+    def test_full_sync_starts_small_and_halves_page_after_read_timeout(self):
+        calls = []
+
+        def request_json(path, params=None):
+            calls.append((path, dict(params or {})))
+            if len(calls) == 1:
+                raise base.requests.exceptions.ReadTimeout("read timed out")
+            return {"Items": [{"Id": "movie-1"}]}
+
+        fake = SimpleNamespace(
+            page_size=500,
+            server_type="jellyfin",
+            request_json=request_json,
+        )
+        items = ultra.ultralight_fetch_library_content(fake, "user-1", "lib-1", "movie")
+        self.assertEqual([item["Id"] for item in items], ["movie-1"])
+        self.assertEqual([call[1]["Limit"] for call in calls], [100, 50])
+        self.assertEqual([call[1]["StartIndex"] for call in calls], [0, 0])
+
+    def test_incremental_rich_fetch_keeps_configured_page_size(self):
+        calls = []
+
+        def request_json(path, params=None):
+            calls.append((path, dict(params or {})))
+            return {"Items": []}
+
+        fake = SimpleNamespace(
+            page_size=500,
+            server_type="jellyfin",
+            request_json=request_json,
+        )
+        ultra.ultralight_fetch_library_content(
+            fake,
+            "user-1",
+            "lib-1",
+            "movie",
+            min_date_last_saved="2026-08-22T10:00:00Z",
+        )
+        self.assertEqual(calls[0][1]["Limit"], 500)
+        self.assertEqual(calls[0][1]["MinDateLastSaved"], "2026-08-22T10:00:00Z")
+
     def test_catalog_entry_does_not_download_poster(self):
         calls = []
         fake = SimpleNamespace(

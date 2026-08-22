@@ -23,12 +23,133 @@ FULL_ITEM_FIELDS = (
 )
 ID_RECONCILE_PAGE_SIZE = 2000
 ID_DETAIL_BATCH_SIZE = 200
+DEFAULT_FULL_SYNC_PAGE_SIZE = 100
+MIN_RICH_PAGE_SIZE = 25
 
 # Preserve the proven base incremental implementation and state machine. The
-# ultra-light layer only changes the periodic deletion reconciliation path.
+# ultra-light layer only changes the expensive Jellyfin-specific hot paths.
 ORIGINAL_CHOOSE_SYNC_MODE = base.JellyfinDataFetcher.choose_sync_mode
 ORIGINAL_RUN_INCREMENTAL_SYNC = base.JellyfinDataFetcher.run_incremental_sync
 ORIGINAL_FINALIZE_STATE = base.JellyfinDataFetcher.finalize_state
+
+
+def ultralight_build_session(self):
+    """Build a session that retries connects/status codes but not read timeouts.
+
+    A large rich /Items request can be intrinsically too expensive for Jellyfin.
+    Retrying the identical request several times only multiplies the delay. Rich
+    metadata paging handles read timeouts adaptively instead.
+    """
+    session = base.requests.Session()
+    retries = base.Retry(
+        total=3,
+        connect=3,
+        read=0,
+        status=3,
+        backoff_factor=0.5,
+        status_forcelist=(429, 500, 502, 503, 504),
+        allowed_methods=frozenset({"GET"}),
+        respect_retry_after_header=True,
+    )
+    adapter = base.HTTPAdapter(max_retries=retries, pool_connections=20, pool_maxsize=20)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+
+    if self.server_type == "emby":
+        session.headers["X-Emby-Token"] = self.jellyfin_token
+    else:
+        session.headers["Authorization"] = (
+            f'MediaBrowser Token="{self.jellyfin_token}", '
+            f'Client="{base.APP_NAME}", Device="Server", '
+            f'DeviceId="beyond-glimpse-sync", Version="{base.APP_VERSION}"'
+        )
+    return session
+
+
+def is_read_timeout_like(exc):
+    if isinstance(exc, base.requests.exceptions.ReadTimeout):
+        return True
+
+    current = exc
+    seen = set()
+    parts = []
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        parts.append(f"{current.__class__.__name__}: {current}")
+        current = current.__cause__ or current.__context__
+
+    text = " ".join(parts).lower()
+    return "read timed out" in text or "readtimeouterror" in text
+
+
+def ultralight_fetch_library_content(self, user_id, library_id, media_type, min_date_last_saved=None):
+    """Fetch rich metadata with conservative/adaptive page sizing.
+
+    Full catalogue builds start at 100 rich items by default because People,
+    Overview, Studios and image/provider fields are expensive on very large
+    Jellyfin libraries. Incremental runs retain PAGE_SIZE for efficiency. If a
+    rich page times out, retry the same offset with a smaller page rather than
+    repeating the same oversized request.
+    """
+    all_items = []
+    start_index = 0
+    include_type = "Movie" if media_type == "movie" else "Series"
+
+    if min_date_last_saved:
+        page_limit = self.page_size
+    else:
+        configured = max(
+            1,
+            int(base.os.environ.get("FULL_SYNC_PAGE_SIZE", str(DEFAULT_FULL_SYNC_PAGE_SIZE))),
+        )
+        page_limit = min(self.page_size, configured)
+
+    floor = min(MIN_RICH_PAGE_SIZE, page_limit)
+
+    while True:
+        params = {
+            "ParentId": library_id,
+            "StartIndex": start_index,
+            "Limit": page_limit,
+            "Recursive": "true",
+            "Fields": FULL_ITEM_FIELDS,
+            "IncludeItemTypes": include_type,
+            "EnableTotalRecordCount": "false",
+        }
+        if min_date_last_saved:
+            params["MinDateLastSaved"] = min_date_last_saved
+
+        if self.server_type == "jellyfin":
+            params["UserId"] = user_id
+            item_path = "/Items"
+        else:
+            item_path = f"/Users/{user_id}/Items"
+
+        try:
+            data = self.request_json(item_path, params=params)
+        except base.requests.RequestException as exc:
+            if not is_read_timeout_like(exc):
+                raise
+            next_limit = max(floor, page_limit // 2)
+            if next_limit >= page_limit:
+                raise
+            print(
+                f"  Rich metadata page timed out at offset {start_index} "
+                f"(limit {page_limit}); retrying with limit {next_limit}"
+            )
+            page_limit = next_limit
+            continue
+
+        items = data.get("Items", [])
+        if not items:
+            break
+        all_items.extend(items)
+        print(f"  Fetched {len(items)} items (offset: {start_index}, limit: {page_limit})")
+        start_index += len(items)
+        if len(items) < page_limit:
+            break
+
+    return all_items
 
 
 def shard_key(item_id):
@@ -329,10 +450,12 @@ def ultralight_finalize_state(self, connection, user_id, allowed_libraries, sync
 
 def activate_ultralight_mode():
     # Schema v2 is the compact-index/detail-shard format introduced by PR #7.
-    # The ID-only reconciliation changes maintenance behavior, not public schema,
-    # so upgrades do not force another full metadata rebuild.
+    # This resilience fix changes request behavior, not the public catalogue
+    # schema, so upgrades do not force another full rebuild solely for versioning.
     base.CATALOG_SCHEMA_VERSION = "2-ultralight"
-    base.APP_VERSION = "1.0.0"
+    base.APP_VERSION = "1.0.1"
+    base.JellyfinDataFetcher.build_session = ultralight_build_session
+    base.JellyfinDataFetcher.fetch_library_content = ultralight_fetch_library_content
     base.JellyfinDataFetcher.build_catalog_entry = ultralight_build_catalog_entry
     base.JellyfinDataFetcher.populate_expected_image_keys = ultralight_populate_expected_image_keys
     base.JellyfinDataFetcher.write_public_catalogue = ultralight_write_public_catalogue
