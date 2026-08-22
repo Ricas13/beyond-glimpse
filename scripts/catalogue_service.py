@@ -2,7 +2,6 @@
 
 import json
 import os
-import sqlite3
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlparse
@@ -80,12 +79,8 @@ class CatalogueHandler(BaseHTTPRequestHandler):
     def handle_status(self):
         connection = open_db()
         try:
-            movies = connection.execute(
-                "SELECT COUNT(*) FROM items WHERE media_type='movie'"
-            ).fetchone()[0]
-            tvshows = connection.execute(
-                "SELECT COUNT(*) FROM items WHERE media_type='tvshow'"
-            ).fetchone()[0]
+            movies = connection.execute("SELECT COUNT(*) FROM items WHERE media_type='movie'").fetchone()[0]
+            tvshows = connection.execute("SELECT COUNT(*) FROM items WHERE media_type='tvshow'").fetchone()[0]
             payload = {
                 "state": get_meta(connection, "sync_state", "starting"),
                 "bootstrapComplete": get_meta(connection, "bootstrap_complete", "0") == "1",
@@ -97,6 +92,7 @@ class CatalogueHandler(BaseHTTPRequestHandler):
                 "lastIncremental": int(get_meta(connection, "last_incremental", "0") or 0),
                 "lastReconcile": int(get_meta(connection, "last_reconcile", "0") or 0),
                 "search": "fts5" if get_meta(connection, "fts_enabled", "0") == "1" else "like",
+                "jellyfinConfigured": self.jellyfin is not None,
             }
             return self.send_json(200, payload)
         finally:
@@ -140,15 +136,10 @@ class CatalogueHandler(BaseHTTPRequestHandler):
                 params.append(f"%{search.casefold()}%")
 
             if genre and genre.lower() != "all":
-                where.append(
-                    "EXISTS (SELECT 1 FROM item_genres g WHERE g.item_id=i.id AND g.genre=?)"
-                )
+                where.append("EXISTS (SELECT 1 FROM item_genres g WHERE g.item_id=i.id AND g.genre=?)")
                 params.append(genre)
 
-            sql = (
-                "SELECT i.* FROM items i WHERE " + " AND ".join(where) +
-                f" ORDER BY {order_sql} LIMIT ? OFFSET ?"
-            )
+            sql = "SELECT i.* FROM items i WHERE " + " AND ".join(where) + f" ORDER BY {order_sql} LIMIT ? OFFSET ?"
             rows = connection.execute(sql, (*params, limit + 1, offset)).fetchall()
             has_more = len(rows) > limit
             rows = rows[:limit]
@@ -211,26 +202,27 @@ class CatalogueHandler(BaseHTTPRequestHandler):
                 base["detailCached"] = True
                 return self.send_json(200, base, cache_control="private, max-age=60")
 
-            try:
-                user_id = self.jellyfin.resolve_user_id(connection)
-                remote = self.jellyfin.fetch_detail(user_id, item_id)
-                if remote:
-                    detail = detail_from_api(remote, row["media_type"])
-                    connection.execute(
-                        """
-                        INSERT INTO item_details(item_id,detail_json,fetched_at) VALUES(?,?,?)
-                        ON CONFLICT(item_id) DO UPDATE SET
-                            detail_json=excluded.detail_json,
-                            fetched_at=excluded.fetched_at
-                        """,
-                        (item_id, json.dumps(detail, ensure_ascii=False, separators=(",", ":")), now),
-                    )
-                    connection.commit()
-                    base.update(detail)
-                    base["detailCached"] = False
-                    return self.send_json(200, base, cache_control="private, max-age=60")
-            except requests.RequestException as exc:
-                print(f"catalogue-api detail fetch failed for {item_id}: {exc}", flush=True)
+            if self.jellyfin is not None:
+                try:
+                    user_id = self.jellyfin.resolve_user_id(connection)
+                    remote = self.jellyfin.fetch_detail(user_id, item_id)
+                    if remote:
+                        detail = detail_from_api(remote, row["media_type"])
+                        connection.execute(
+                            """
+                            INSERT INTO item_details(item_id,detail_json,fetched_at) VALUES(?,?,?)
+                            ON CONFLICT(item_id) DO UPDATE SET
+                                detail_json=excluded.detail_json,
+                                fetched_at=excluded.fetched_at
+                            """,
+                            (item_id, json.dumps(detail, ensure_ascii=False, separators=(",", ":")), now),
+                        )
+                        connection.commit()
+                        base.update(detail)
+                        base["detailCached"] = False
+                        return self.send_json(200, base, cache_control="private, max-age=60")
+                except requests.RequestException as exc:
+                    print(f"catalogue-api detail fetch failed for {item_id}: {exc}", flush=True)
 
             if detail_row:
                 base.update(json.loads(detail_row["detail_json"]))
@@ -252,31 +244,31 @@ class CatalogueHandler(BaseHTTPRequestHandler):
 
         connection = open_db()
         try:
-            row = connection.execute(
-                "SELECT poster_tag FROM items WHERE id=?", (item_id,)
-            ).fetchone()
-            # The public poster route is an exact catalogue+tag whitelist. A guessed
-            # Jellyfin ID or stale tag cannot be used to turn this service into a
-            # general authenticated image proxy.
+            row = connection.execute("SELECT poster_tag FROM items WHERE id=?", (item_id,)).fetchone()
             if row is None or not row["poster_tag"] or row["poster_tag"] != tag:
                 return self.send_json(404, {"error": "poster not found"})
         finally:
             connection.close()
 
+        if self.jellyfin is None:
+            return self.send_json(503, {"error": "Jellyfin is not configured"})
         try:
-            body, content_type = self.jellyfin.fetch_poster(
-                item_id, tag, POSTER_WIDTH, POSTER_QUALITY
-            )
+            body, content_type = self.jellyfin.fetch_poster(item_id, tag, POSTER_WIDTH, POSTER_QUALITY)
         except requests.RequestException:
             return self.send_json(502, {"error": "poster upstream unavailable"})
         return self.send_bytes(200, body, content_type)
 
 
 def main():
-    CatalogueHandler.jellyfin = JellyfinClient()
+    if os.environ.get("JELLYFIN_URL") and os.environ.get("JELLYFIN_TOKEN"):
+        CatalogueHandler.jellyfin = JellyfinClient()
+        state = "with Jellyfin upstream"
+    else:
+        CatalogueHandler.jellyfin = None
+        state = "without Jellyfin upstream"
     server = ThreadingHTTPServer((HOST, PORT), CatalogueHandler)
     server.daemon_threads = True
-    print(f"Catalogue API listening on http://{HOST}:{PORT}", flush=True)
+    print(f"Catalogue API listening on http://{HOST}:{PORT} ({state})", flush=True)
     try:
         server.serve_forever(poll_interval=0.5)
     except KeyboardInterrupt:
