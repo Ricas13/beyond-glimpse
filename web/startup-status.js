@@ -6,6 +6,7 @@
     const STATUS_URL = '/catalogue-status.json';
     const POLL_MS = 3000;
     let readyReloaded = false;
+    let sawSyncing = false;
     let timer = null;
 
     function hasUsableCatalogue() {
@@ -47,6 +48,7 @@
             const state = status && status.state;
 
             if (state === 'starting' || state === 'syncing') {
+                sawSyncing = true;
                 setLoadingMessage('Catalogue is being prepared… This page will update automatically.');
                 schedule();
                 return;
@@ -57,7 +59,9 @@
                 return;
             }
 
-            if (state === 'ready' && !readyReloaded && !hasUsableCatalogue()) {
+            // If this page observed the startup refresh, reload the compact indexes
+            // once when it completes. Existing data stays visible until this point.
+            if (state === 'ready' && sawSyncing && !readyReloaded) {
                 readyReloaded = true;
                 if (typeof loadMedia === 'function') {
                     await loadMedia();
