@@ -23,9 +23,88 @@ PORT = int(os.environ.get("CATALOGUE_API_PORT", "8091"))
 MAX_PAGE_SIZE = 120
 DEFAULT_PAGE_SIZE = 60
 DETAIL_TTL_SECONDS = max(300, int(os.environ.get("DETAIL_CACHE_TTL_SECONDS", str(7 * 86400))))
+EPISODE_CACHE_TTL_SECONDS = max(300, int(os.environ.get("EPISODE_CACHE_TTL_SECONDS", str(6 * 3600))))
 POSTER_WIDTH = max(64, min(1000, int(os.environ.get("POSTER_PROXY_MAX_WIDTH", "320"))))
 POSTER_QUALITY = max(30, min(95, int(os.environ.get("POSTER_PROXY_QUALITY", "72"))))
 LIBRARY_CACHE_TTL_SECONDS = max(60, int(os.environ.get("LIBRARY_CACHE_TTL_SECONDS", "3600")))
+
+
+def int_or_none(value):
+    try:
+        return int(value) if value not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
+
+
+def season_from_api(item):
+    season_id = str(item.get("Id") or "")
+    if not season_id:
+        return None
+    index_number = int_or_none(item.get("IndexNumber"))
+    name = str(item.get("Name") or "").strip()
+    if not name:
+        if index_number == 0:
+            name = "Specials"
+        elif index_number is not None:
+            name = f"Season {index_number}"
+        else:
+            name = "Season"
+    return {
+        "id": season_id,
+        "name": name,
+        "indexNumber": index_number,
+    }
+
+
+def episode_from_api(item):
+    episode_id = str(item.get("Id") or "")
+    if not episode_id:
+        return None
+    runtime_ticks = int_or_none(item.get("RunTimeTicks")) or 0
+    return {
+        "id": episode_id,
+        "name": str(item.get("Name") or ""),
+        "episodeNumber": int_or_none(item.get("IndexNumber")),
+        "seasonNumber": int_or_none(item.get("ParentIndexNumber")),
+        "runtime": runtime_ticks // 10000,
+        "airDate": str(item.get("PremiereDate") or ""),
+        "overview": str(item.get("Overview") or ""),
+    }
+
+
+def season_sort_key(season):
+    index_number = season.get("indexNumber")
+    if index_number == 0:
+        return (1, 10_000, season.get("name", "").casefold())
+    if index_number is None:
+        return (1, 9_999, season.get("name", "").casefold())
+    return (0, index_number, season.get("name", "").casefold())
+
+
+def episode_sort_key(episode):
+    number = episode.get("episodeNumber")
+    return (number is None, number if number is not None else 99_999, episode.get("name", "").casefold())
+
+
+def ensure_tv_cache_schema(connection):
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS series_season_cache (
+            series_id TEXT PRIMARY KEY,
+            payload_json TEXT NOT NULL,
+            fetched_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS season_episode_cache (
+            season_id TEXT PRIMARY KEY,
+            series_id TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            fetched_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_season_episode_cache_series
+            ON season_episode_cache(series_id);
+        """
+    )
+    connection.commit()
 
 
 class CatalogueHandler(BaseHTTPRequestHandler):
@@ -69,8 +148,14 @@ class CatalogueHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/libraries":
                 return self.handle_libraries(parse_qs(parsed.query))
             if parsed.path.startswith("/api/item/"):
-                item_id = unquote(parsed.path[len("/api/item/"):])
-                return self.handle_item(item_id)
+                suffix = unquote(parsed.path[len("/api/item/"):])
+                if suffix.endswith("/seasons"):
+                    series_id = suffix[:-len("/seasons")]
+                    return self.handle_seasons(series_id)
+                if suffix.endswith("/episodes"):
+                    series_id = suffix[:-len("/episodes")]
+                    return self.handle_episodes(series_id, parse_qs(parsed.query))
+                return self.handle_item(suffix)
             if parsed.path.startswith("/internal/poster/"):
                 return self.handle_poster(parsed.path)
             return self.send_json(404, {"error": "not found"})
@@ -315,6 +400,181 @@ class CatalogueHandler(BaseHTTPRequestHandler):
             else:
                 base["detailUnavailable"] = True
             return self.send_json(200, base)
+        finally:
+            connection.close()
+
+    @staticmethod
+    def series_row(connection, series_id):
+        if not series_id or len(series_id) > 128:
+            return None
+        return connection.execute(
+            "SELECT id,title FROM items WHERE id=? AND media_type='tvshow'",
+            (series_id,),
+        ).fetchone()
+
+    def fetch_seasons_payload(self, connection, series_id):
+        ensure_tv_cache_schema(connection)
+        cached = connection.execute(
+            "SELECT payload_json,fetched_at FROM series_season_cache WHERE series_id=?",
+            (series_id,),
+        ).fetchone()
+        now = int(time.time())
+        if cached and now - int(cached["fetched_at"]) < EPISODE_CACHE_TTL_SECONDS:
+            return json.loads(cached["payload_json"]), True, False
+
+        stale = json.loads(cached["payload_json"]) if cached else None
+        if self.jellyfin is None:
+            if stale is not None:
+                return stale, True, True
+            raise RuntimeError("Jellyfin is not configured")
+
+        try:
+            user_id = self.jellyfin.resolve_user_id(connection)
+            data = self.jellyfin.get_json(
+                "/Items",
+                params={
+                    "ParentId": series_id,
+                    "Recursive": "false",
+                    "IncludeItemTypes": "Season",
+                    "EnableTotalRecordCount": "false",
+                    "EnableUserData": "false",
+                    "EnableImages": "false",
+                    "UserId": user_id,
+                },
+            )
+            seasons = []
+            for item in data.get("Items") or []:
+                parsed = season_from_api(item)
+                if parsed is not None:
+                    seasons.append(parsed)
+            seasons.sort(key=season_sort_key)
+            payload = {"seriesId": series_id, "seasons": seasons}
+            connection.execute(
+                """
+                INSERT INTO series_season_cache(series_id,payload_json,fetched_at) VALUES(?,?,?)
+                ON CONFLICT(series_id) DO UPDATE SET
+                    payload_json=excluded.payload_json,
+                    fetched_at=excluded.fetched_at
+                """,
+                (series_id, json.dumps(payload, ensure_ascii=False, separators=(",", ":")), now),
+            )
+            connection.commit()
+            return payload, False, False
+        except requests.RequestException:
+            if stale is not None:
+                return stale, True, True
+            raise
+
+    def handle_seasons(self, series_id):
+        connection = open_db()
+        try:
+            if self.series_row(connection, series_id) is None:
+                return self.send_json(404, {"error": "series not found"})
+            try:
+                payload, cached, stale = self.fetch_seasons_payload(connection, series_id)
+            except RuntimeError:
+                return self.send_json(503, {"error": "Jellyfin is not configured"})
+            result = dict(payload)
+            result["cached"] = cached
+            if stale:
+                result["stale"] = True
+            return self.send_json(200, result, cache_control="private, max-age=60")
+        finally:
+            connection.close()
+
+    def handle_episodes(self, series_id, query):
+        season_id = ((query.get("seasonId") or [""])[0] or "").strip()
+        if not season_id or len(season_id) > 128:
+            return self.send_json(400, {"error": "seasonId is required"})
+
+        connection = open_db()
+        try:
+            if self.series_row(connection, series_id) is None:
+                return self.send_json(404, {"error": "series not found"})
+
+            try:
+                seasons_payload, _, _ = self.fetch_seasons_payload(connection, series_id)
+            except RuntimeError:
+                return self.send_json(503, {"error": "Jellyfin is not configured"})
+            allowed_seasons = {
+                str(season.get("id") or "") for season in seasons_payload.get("seasons") or []
+            }
+            if season_id not in allowed_seasons:
+                return self.send_json(404, {"error": "season not found for series"})
+
+            ensure_tv_cache_schema(connection)
+            cached = connection.execute(
+                """
+                SELECT payload_json,fetched_at FROM season_episode_cache
+                WHERE season_id=? AND series_id=?
+                """,
+                (season_id, series_id),
+            ).fetchone()
+            now = int(time.time())
+            if cached and now - int(cached["fetched_at"]) < EPISODE_CACHE_TTL_SECONDS:
+                payload = json.loads(cached["payload_json"])
+                payload["cached"] = True
+                return self.send_json(200, payload, cache_control="private, max-age=60")
+
+            stale = json.loads(cached["payload_json"]) if cached else None
+            if self.jellyfin is None:
+                if stale is not None:
+                    stale["cached"] = True
+                    stale["stale"] = True
+                    return self.send_json(200, stale)
+                return self.send_json(503, {"error": "Jellyfin is not configured"})
+
+            try:
+                user_id = self.jellyfin.resolve_user_id(connection)
+                data = self.jellyfin.get_json(
+                    "/Items",
+                    params={
+                        "ParentId": season_id,
+                        "Recursive": "false",
+                        "IncludeItemTypes": "Episode",
+                        "Fields": "Overview,RunTimeTicks,PremiereDate",
+                        "EnableTotalRecordCount": "false",
+                        "EnableUserData": "false",
+                        "EnableImages": "false",
+                        "UserId": user_id,
+                    },
+                )
+                episodes = []
+                for item in data.get("Items") or []:
+                    parsed = episode_from_api(item)
+                    if parsed is not None:
+                        episodes.append(parsed)
+                episodes.sort(key=episode_sort_key)
+                payload = {
+                    "seriesId": series_id,
+                    "seasonId": season_id,
+                    "episodes": episodes,
+                }
+                connection.execute(
+                    """
+                    INSERT INTO season_episode_cache(season_id,series_id,payload_json,fetched_at)
+                    VALUES(?,?,?,?)
+                    ON CONFLICT(season_id) DO UPDATE SET
+                        series_id=excluded.series_id,
+                        payload_json=excluded.payload_json,
+                        fetched_at=excluded.fetched_at
+                    """,
+                    (
+                        season_id,
+                        series_id,
+                        json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+                        now,
+                    ),
+                )
+                connection.commit()
+                payload["cached"] = False
+                return self.send_json(200, payload, cache_control="private, max-age=60")
+            except requests.RequestException:
+                if stale is not None:
+                    stale["cached"] = True
+                    stale["stale"] = True
+                    return self.send_json(200, stale)
+                raise
         finally:
             connection.close()
 
