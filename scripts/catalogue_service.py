@@ -25,11 +25,13 @@ DEFAULT_PAGE_SIZE = 60
 DETAIL_TTL_SECONDS = max(300, int(os.environ.get("DETAIL_CACHE_TTL_SECONDS", str(7 * 86400))))
 POSTER_WIDTH = max(64, min(1000, int(os.environ.get("POSTER_PROXY_MAX_WIDTH", "320"))))
 POSTER_QUALITY = max(30, min(95, int(os.environ.get("POSTER_PROXY_QUALITY", "72"))))
+LIBRARY_CACHE_TTL_SECONDS = max(60, int(os.environ.get("LIBRARY_CACHE_TTL_SECONDS", "3600")))
 
 
 class CatalogueHandler(BaseHTTPRequestHandler):
     server_version = "BeyondGlimpseCatalogue/2"
     jellyfin = None
+    library_cache = {"fetched_at": 0, "items": []}
 
     def log_message(self, fmt, *args):
         print(f"catalogue-api: {self.address_string()} - {fmt % args}", flush=True)
@@ -64,6 +66,8 @@ class CatalogueHandler(BaseHTTPRequestHandler):
                 return self.handle_items(parse_qs(parsed.query))
             if parsed.path == "/api/genres":
                 return self.handle_genres(parse_qs(parsed.query))
+            if parsed.path == "/api/libraries":
+                return self.handle_libraries(parse_qs(parsed.query))
             if parsed.path.startswith("/api/item/"):
                 item_id = unquote(parsed.path[len("/api/item/"):])
                 return self.handle_item(item_id)
@@ -103,8 +107,75 @@ class CatalogueHandler(BaseHTTPRequestHandler):
         value = (query.get("type") or ["movie"])[0]
         return "tvshow" if value in {"tvshow", "tvshows", "series"} else "movie"
 
+    @staticmethod
+    def library_id(query):
+        value = ((query.get("library") or [""])[0] or "").strip()
+        if len(value) > 128:
+            return ""
+        return value
+
+    @classmethod
+    def cached_libraries(cls):
+        if cls.jellyfin is None:
+            return []
+        now = int(time.time())
+        cached_at = int(cls.library_cache.get("fetched_at") or 0)
+        cached_items = cls.library_cache.get("items") or []
+        if cached_items and now - cached_at < LIBRARY_CACHE_TTL_SECONDS:
+            return cached_items
+        items = cls.jellyfin.eligible_libraries()
+        cls.library_cache = {"fetched_at": now, "items": items}
+        return items
+
+    def handle_libraries(self, query):
+        media_type = self.media_type(query)
+        libraries = [
+            library for library in self.cached_libraries()
+            if library.get("media_type") == media_type
+        ]
+        connection = open_db()
+        try:
+            counts = {
+                str(row["library_id"]): int(row["count"])
+                for row in connection.execute(
+                    """
+                    SELECT library_id, COUNT(*) AS count
+                    FROM items
+                    WHERE media_type=?
+                    GROUP BY library_id
+                    """,
+                    (media_type,),
+                ).fetchall()
+            }
+            payload = []
+            for library in libraries:
+                library_id = str(library.get("id") or "")
+                if not library_id:
+                    continue
+                payload.append(
+                    {
+                        "id": library_id,
+                        "name": str(library.get("name") or ""),
+                        "type": media_type,
+                        "count": counts.get(library_id, 0),
+                    }
+                )
+            payload.sort(key=lambda value: value["name"].casefold())
+            return self.send_json(
+                200,
+                {
+                    "type": media_type,
+                    "total": sum(counts.values()),
+                    "libraries": payload,
+                },
+                cache_control="public, max-age=300",
+            )
+        finally:
+            connection.close()
+
     def handle_items(self, query):
         media_type = self.media_type(query)
+        library_id = self.library_id(query)
         try:
             limit = max(1, min(MAX_PAGE_SIZE, int((query.get("limit") or [DEFAULT_PAGE_SIZE])[0])))
             offset = max(0, min(1_000_000, int((query.get("offset") or [0])[0])))
@@ -125,6 +196,10 @@ class CatalogueHandler(BaseHTTPRequestHandler):
 
         where = ["i.media_type = ?"]
         params = [media_type]
+        if library_id:
+            where.append("i.library_id = ?")
+            params.append(library_id)
+
         connection = open_db()
         try:
             fts_query = safe_fts_query(search) if search else None
@@ -155,6 +230,7 @@ class CatalogueHandler(BaseHTTPRequestHandler):
                     "type": media_type,
                     "query": search,
                     "genre": genre,
+                    "library": library_id,
                 },
             )
         finally:
@@ -162,22 +238,31 @@ class CatalogueHandler(BaseHTTPRequestHandler):
 
     def handle_genres(self, query):
         media_type = self.media_type(query)
+        library_id = self.library_id(query)
         connection = open_db()
         try:
+            where = ["i.media_type=?"]
+            params = [media_type]
+            if library_id:
+                where.append("i.library_id=?")
+                params.append(library_id)
             rows = connection.execute(
                 """
                 SELECT g.genre, COUNT(*) AS count
                 FROM item_genres g
                 JOIN items i ON i.id=g.item_id
-                WHERE i.media_type=?
+                WHERE """ + " AND ".join(where) + """
                 GROUP BY g.genre
                 ORDER BY g.genre COLLATE NOCASE
                 """,
-                (media_type,),
+                params,
             ).fetchall()
             return self.send_json(
                 200,
-                {"genres": [{"name": row["genre"], "count": row["count"]} for row in rows]},
+                {
+                    "library": library_id,
+                    "genres": [{"name": row["genre"], "count": row["count"]} for row in rows],
+                },
                 cache_control="public, max-age=60",
             )
         finally:
