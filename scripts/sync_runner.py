@@ -40,6 +40,18 @@ def parse_sync_line(status, line):
     if match:
         status["changedRecords"] = int(match.group(1))
 
+    match = re.search(
+        r"ID reconciliation:\s+(\d+)\s+current IDs,\s+(\d+)\s+deleted,\s+(\d+)\s+new,\s+(\d+)\s+moved",
+        line,
+    )
+    if match:
+        status["idReconciliation"] = {
+            "currentIds": int(match.group(1)),
+            "deleted": int(match.group(2)),
+            "new": int(match.group(3)),
+            "moved": int(match.group(4)),
+        }
+
     match = re.search(r"Removed\s+(\d+)\s+stale cached images", line)
     if match:
         status["staleImagesRemoved"] = int(match.group(1))
@@ -63,6 +75,7 @@ def read_catalog_state(state_dir: Path):
             rows = dict(connection.execute("SELECT key, value FROM meta"))
             result["watermark"] = rows.get("watermark")
             result["lastFullReconcile"] = rows.get("last_full_reconcile")
+            result["lastIdReconcile"] = rows.get("last_id_reconcile")
             result["catalogSchemaVersion"] = rows.get("schema_version")
 
             movie_count = connection.execute(
@@ -145,6 +158,7 @@ def run(server_type, state_dir: Path, output_dir: Path, command):
         "mode": None,
         "reason": None,
         "changedRecords": None,
+        "idReconciliation": None,
         "staleImagesRemoved": 0,
     }
     atomic_write_json(status_path, status)

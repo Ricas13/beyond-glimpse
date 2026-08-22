@@ -98,8 +98,20 @@ def print_text(data):
     print(f"Catalogue: {data.get('movies', 0):,} movies | {data.get('tvShows', 0):,} TV shows")
     if data.get("changedRecords") is not None:
         print(f"Changed records: {data['changedRecords']:,}")
-    if data.get("lastFullReconcile"):
-        print(f"Last full reconcile: {data['lastFullReconcile']}")
+
+    reconciliation = data.get("idReconciliation")
+    if reconciliation:
+        print(
+            "ID reconciliation: "
+            f"{reconciliation.get('currentIds', 0):,} current | "
+            f"{reconciliation.get('deleted', 0):,} deleted | "
+            f"{reconciliation.get('new', 0):,} new | "
+            f"{reconciliation.get('moved', 0):,} moved"
+        )
+    if data.get("lastIdReconcile"):
+        print(f"Last ID reconciliation: {data['lastIdReconcile']}")
+    elif data.get("lastFullReconcile"):
+        print(f"Last deletion reconciliation: {data['lastFullReconcile']}")
     if data.get("watermark"):
         print(f"Watermark: {data['watermark']}")
 
