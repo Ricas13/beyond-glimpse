@@ -1,8 +1,13 @@
 // Beyond Glimpse service worker: cache the tiny application shell only.
-// Catalogue JSON and media artwork deliberately stay out of Cache Storage.
+// Catalogue API responses and media artwork deliberately stay out of Cache Storage.
 
-const CACHE_NAME = 'beyond-glimpse-shell-v8';
-const SHELL_ASSETS = ['/manifest.json', '/offline.html', '/large-library.js?v=2'];
+const CACHE_NAME = 'beyond-glimpse-shell-v9';
+const SHELL_ASSETS = [
+    '/manifest.json',
+    '/offline.html',
+    '/large-library.js?v=3',
+    '/startup-status.js?v=2'
+];
 
 self.addEventListener('install', event => {
     event.waitUntil(
@@ -24,9 +29,11 @@ self.addEventListener('activate', event => {
     );
 });
 
-function isMediaRequest(request) {
+function isDynamicRequest(request) {
     const url = new URL(request.url);
-    return url.pathname.startsWith('/data/') || url.pathname.startsWith('/poster/');
+    return url.pathname.startsWith('/data/') ||
+        url.pathname.startsWith('/api/') ||
+        url.pathname.startsWith('/poster/');
 }
 
 function isHtmlRequest(request) {
@@ -60,9 +67,9 @@ async function cacheFirst(request) {
 self.addEventListener('fetch', event => {
     if (!event.request.url.startsWith(self.location.origin)) return;
 
-    // Never duplicate the server-side bounded poster cache or catalogue data in
-    // browser Cache Storage. Normal HTTP caching/ETag handling remains available.
-    if (isMediaRequest(event.request)) {
+    // The server owns catalogue/detail/poster caching. Never accumulate those
+    // responses again in browser Cache Storage.
+    if (isDynamicRequest(event.request)) {
         event.respondWith(fetch(event.request));
         return;
     }
