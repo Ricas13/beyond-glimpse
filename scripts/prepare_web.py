@@ -15,18 +15,31 @@ START_REPLACEMENT = """        // Initialize after the Beyond Glimpse runtime ha
         window.addEventListener('beyond-glimpse:ready', window.__startBeyondGlimpseMedia, { once: true });
         setTimeout(window.__startBeyondGlimpseMedia, 3000);"""
 
-SCRIPT_TAG = '    <script src="/large-library.js?v=5"></script>'
+SCRIPT_TAG = '    <script src="/large-library.js?v=6"></script>'
 OLD_SCRIPT_TAGS = (
     '    <script src="/large-library.js?v=1"></script>',
     '    <script src="/large-library.js?v=2"></script>',
     '    <script src="/large-library.js?v=3"></script>',
     '    <script src="/large-library.js?v=4"></script>',
+    '    <script src="/large-library.js?v=5"></script>',
 )
-STARTUP_STATUS_TAG = '    <script src="/startup-status.js?v=2"></script>'
-OLD_STARTUP_TAG = '    <script src="/startup-status.js?v=1"></script>'
+STARTUP_STATUS_TAG = '    <script src="/startup-status.js?v=3"></script>'
+OLD_STARTUP_TAGS = (
+    '    <script src="/startup-status.js?v=1"></script>',
+    '    <script src="/startup-status.js?v=2"></script>',
+)
+
+# Strip any prior Beyond Glimpse external runtime tags before placing the
+# canonical pair immediately before the *real* closing body tag. Glimpse's
+# source contains an HTML comment that literally mentions "</body>" before the
+# actual closing tag, so first-occurrence string replacement is unsafe.
+RUNTIME_TAG_RE = re.compile(
+    r'^[ \t]*<script src="/(?:large-library\.js\?v=\d+|startup-status\.js\?v=\d+)"></script>[ \t]*\r?\n?',
+    re.MULTILINE,
+)
 
 # v2.0.1 briefly used an inline function-toString shim. Remove it during
-# upgrades; v2.0.2 detects the primary server directly from the themed title.
+# upgrades; v2.0.2+ detects the primary server directly from the themed title.
 LEGACY_HINT_RE = re.compile(
     r"\s*<script>\s*\(\(\) => \{\s*window\.__beyondGlimpseServerHintShim = true;.*?</script>\s*",
     re.DOTALL,
@@ -101,44 +114,34 @@ def prepare_runtime_js(path: Path) -> bool:
     return changed
 
 
-def prepare(path: Path) -> bool:
-    source = path.read_text(encoding="utf-8")
-    changed = False
+def place_runtime_tags(source: str) -> str:
+    source = RUNTIME_TAG_RE.sub("", source)
+    body_close = source.rfind("</body>")
+    if body_close < 0:
+        raise RuntimeError("Could not find final </body> in Glimpse index")
 
-    cleaned, count = LEGACY_HINT_RE.subn("\n", source, count=1)
-    if count:
-        source = cleaned
-        changed = True
+    before = source[:body_close].rstrip()
+    after = source[body_close:]
+    return f"{before}\n\n{SCRIPT_TAG}\n{STARTUP_STATUS_TAG}\n{after}"
+
+
+def prepare(path: Path) -> bool:
+    original = path.read_text(encoding="utf-8")
+    source = original
+
+    source = LEGACY_HINT_RE.sub("\n", source, count=1)
 
     if START_MARKER in source:
         source = source.replace(START_MARKER, START_REPLACEMENT, 1)
-        changed = True
     elif START_REPLACEMENT not in source:
         raise RuntimeError("Could not find Glimpse loadMedia initialization marker")
 
-    if SCRIPT_TAG not in source:
-        replaced = False
-        for old in OLD_SCRIPT_TAGS:
-            if old in source:
-                source = source.replace(old, SCRIPT_TAG, 1)
-                changed = True
-                replaced = True
-                break
-        if not replaced:
-            if "</body>" not in source:
-                raise RuntimeError("Could not find </body> in Glimpse index")
-            source = source.replace("</body>", f"{SCRIPT_TAG}\n</body>", 1)
-            changed = True
+    # Always normalize external runtime placement. This also repairs v2.0.0-
+    # v2.0.2 pages where the tags were accidentally injected into Glimpse's
+    # comment that mentions the literal text "</body>".
+    source = place_runtime_tags(source)
 
-    if OLD_STARTUP_TAG in source:
-        source = source.replace(OLD_STARTUP_TAG, STARTUP_STATUS_TAG, 1)
-        changed = True
-    elif STARTUP_STATUS_TAG not in source:
-        if SCRIPT_TAG not in source:
-            raise RuntimeError("Could not find Beyond Glimpse runtime script tag")
-        source = source.replace(SCRIPT_TAG, f"{SCRIPT_TAG}\n{STARTUP_STATUS_TAG}", 1)
-        changed = True
-
+    changed = source != original
     if changed:
         path.write_text(source, encoding="utf-8")
 
