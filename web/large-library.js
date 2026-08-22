@@ -1,30 +1,28 @@
-// Beyond Glimpse ultra-light large-library runtime.
-// Keeps the inherited UI but replaces its expensive data/rendering hot paths.
+// Beyond Glimpse v2 catalogue runtime.
+// Jellyfin uses a SQLite-backed paginated API; Plex/Emby retain the inherited
+// static JSON compatibility path.
 
 (() => {
-    const DEFAULT_BATCH_SIZE = 96;
-    const MOBILE_BATCH_SIZE = 48;
-    const SEARCH_DEBOUNCE_MS = 140;
+    const PAGE_SIZE = window.innerWidth < 768 ? 48 : 96;
+    const SEARCH_DEBOUNCE_MS = 180;
     const PRELOAD_MARGIN = '1200px 0px';
     const originalLoadSource = typeof loadMedia === 'function' ? String(loadMedia) : '';
 
-    let renderGeneration = 0;
+    let serverType = null;
+    let dataBase = null;
     let loadMoreObserver = null;
     let filterTimer = null;
-    let dataBase = null;
-    let serverType = null;
-    const detailShardCache = new Map();
-
-    function batchSize() {
-        return window.innerWidth < 768 ? MOBILE_BATCH_SIZE : DEFAULT_BATCH_SIZE;
-    }
+    let queryGeneration = 0;
+    let apiLoading = false;
+    let apiHasMore = false;
+    let apiNextOffset = 0;
+    let apiSearch = '';
+    let apiActiveType = 'movies';
 
     function hintedServerType() {
         for (const type of ['jellyfin', 'plex', 'emby']) {
             if (originalLoadSource.includes(`data/${type}/movies.json`) ||
-                originalLoadSource.includes(`data/${type}/tvshows.json`)) {
-                return type;
-            }
+                originalLoadSource.includes(`data/${type}/tvshows.json`)) return type;
         }
         const path = window.location.pathname.toLowerCase();
         if (path.startsWith('/jellyfin/')) return 'jellyfin';
@@ -33,104 +31,73 @@
         return null;
     }
 
-    async function loadIndexesFrom(base, type) {
+    function isApiMode() {
+        return serverType === 'jellyfin';
+    }
+
+    function apiMediaType(type) {
+        return type === 'tvshows' ? 'tvshow' : 'movie';
+    }
+
+    function activeTabType() {
+        const active = document.querySelector('.tab.active');
+        return active && active.dataset.content === 'tvshows' ? 'tvshows' : 'movies';
+    }
+
+    function sortQuery() {
+        const method = String(currentSortMethod || 'title').toLowerCase();
+        if (method.includes('date') || method.includes('added') || method.includes('recent')) {
+            return { sort: 'added', order: method.includes('asc') ? 'asc' : 'desc' };
+        }
+        if (method.includes('year') || method.includes('release')) {
+            return { sort: 'year', order: method.includes('asc') ? 'asc' : 'desc' };
+        }
+        return { sort: 'title', order: method.includes('desc') ? 'desc' : 'asc' };
+    }
+
+    async function loadStaticIndexes(base, type) {
         const [moviesResponse, tvResponse] = await Promise.all([
             fetch(`${base}/movies.json`, { cache: 'no-cache' }),
             fetch(`${base}/tvshows.json`, { cache: 'no-cache' })
         ]);
-        if (!moviesResponse.ok || !tvResponse.ok) {
-            throw new Error(`catalogue unavailable at ${base}`);
-        }
-        const [movies, tvshows] = await Promise.all([
-            moviesResponse.json(),
-            tvResponse.json()
-        ]);
-        if (!Array.isArray(movies) || !Array.isArray(tvshows)) {
-            throw new Error(`invalid catalogue at ${base}`);
-        }
+        if (!moviesResponse.ok || !tvResponse.ok) throw new Error(`catalogue unavailable at ${base}`);
+        const [movies, tvshows] = await Promise.all([moviesResponse.json(), tvResponse.json()]);
+        if (!Array.isArray(movies) || !Array.isArray(tvshows)) throw new Error('invalid catalogue');
         dataBase = base;
         serverType = type;
         return { movies, tvshows };
     }
 
-    async function resolveIndexes() {
+    async function resolveStaticIndexes() {
         const hinted = hintedServerType();
-        if (hinted) {
-            return loadIndexesFrom(`/data/${hinted}`, hinted);
+        if (hinted && hinted !== 'jellyfin') return loadStaticIndexes(`/data/${hinted}`, hinted);
+        let lastError;
+        for (const type of ['plex', 'emby']) {
+            try { return await loadStaticIndexes(`/data/${type}`, type); }
+            catch (error) { lastError = error; }
         }
-
-        let lastError = null;
-        for (const type of ['jellyfin', 'plex', 'emby']) {
-            try {
-                return await loadIndexesFrom(`/data/${type}`, type);
-            } catch (error) {
-                lastError = error;
-            }
-        }
-        throw lastError || new Error('no configured catalogue found');
-    }
-
-    function shardKey(itemId) {
-        const value = String(itemId || '').toLowerCase();
-        return /^[0-9a-f]{2}/.test(value) ? value.slice(0, 2) : 'zz';
-    }
-
-    async function loadDetails(item, type) {
-        if (serverType !== 'jellyfin') return item;
-        const shard = shardKey(item.id);
-        const plural = type === 'movies' ? 'movies' : 'tvshows';
-        const cacheKey = `${plural}:${shard}`;
-
-        if (!detailShardCache.has(cacheKey)) {
-            detailShardCache.set(cacheKey, (async () => {
-                const response = await fetch(`${dataBase}/details/${plural}/${shard}.json`, { cache: 'no-cache' });
-                if (!response.ok) return {};
-                const payload = await response.json();
-                return payload && typeof payload === 'object' ? payload : {};
-            })());
-        }
-
-        const shardData = await detailShardCache.get(cacheKey);
-        return Object.assign({}, item, shardData[item.id] || {});
+        throw lastError || new Error('no compatible catalogue found');
     }
 
     function posterUrl(item, type) {
-        if (serverType === 'jellyfin') {
-            if (!item.posterTag) return null;
-            return `/poster/${encodeURIComponent(item.id)}/${encodeURIComponent(item.posterTag)}.jpg`;
+        if (isApiMode()) {
+            return item.posterTag ? `/poster/${encodeURIComponent(item.id)}/${encodeURIComponent(item.posterTag)}.jpg` : null;
         }
         const plural = type === 'movies' ? 'movies' : 'tvshows';
         return `${dataBase}/posters/${plural}/${encodeURIComponent(item.id)}.jpg`;
     }
 
     function legacyBackdropUrl(item, type) {
-        if (serverType === 'jellyfin') return null;
+        if (isApiMode()) return null;
         const plural = type === 'movies' ? 'movies' : 'tvshows';
         return `${dataBase}/backdrops/${plural}/${encodeURIComponent(item.id)}.jpg`;
     }
 
-    function setNoResultsMessage(contentDiv, type, searchTerm) {
-        const messageElem = contentDiv.querySelector('.no-results-message');
-        const helpElem = contentDiv.querySelector('.no-results-help');
-        const label = type === 'movies' ? 'Movies' : 'TV Shows';
-        let message;
-        let help;
-
-        if (currentGenre !== 'all' && searchTerm) {
-            message = `No ${label} in the “${currentGenre}” genre match “${searchTerm}”.`;
-            help = 'Try a different search or clear the genre filter.';
-        } else if (currentGenre !== 'all') {
-            message = `No ${label} were found in the “${currentGenre}” genre.`;
-            help = 'Try selecting a different genre.';
-        } else if (searchTerm) {
-            message = `No ${label} match “${searchTerm}”.`;
-            help = 'Try a different search.';
-        } else {
-            message = `No ${label} are available.`;
-            help = '';
-        }
-        messageElem.textContent = message;
-        helpElem.textContent = help;
+    async function loadDetails(item) {
+        if (!isApiMode()) return item;
+        const response = await fetch(`/api/item/${encodeURIComponent(item.id)}`, { cache: 'no-store' });
+        if (!response.ok) throw new Error(`detail request failed: ${response.status}`);
+        return response.json();
     }
 
     function safeTextPlaceholder(container, title, large = false) {
@@ -144,6 +111,29 @@
         return placeholder;
     }
 
+    function setNoResultsMessage(content, type, searchTerm) {
+        const messageElem = content.querySelector('.no-results-message');
+        const helpElem = content.querySelector('.no-results-help');
+        const label = type === 'movies' ? 'Movies' : 'TV Shows';
+        let message;
+        let help;
+        if (currentGenre !== 'all' && searchTerm) {
+            message = `No ${label} in the “${currentGenre}” genre match “${searchTerm}”.`;
+            help = 'Try a different search or clear the genre filter.';
+        } else if (currentGenre !== 'all') {
+            message = `No ${label} were found in the “${currentGenre}” genre.`;
+            help = 'Try selecting a different genre.';
+        } else if (searchTerm) {
+            message = `No ${label} match “${searchTerm}”.`;
+            help = 'Try a different search.';
+        } else {
+            message = `No ${label} are available yet.`;
+            help = isApiMode() ? 'The catalogue may still be indexing.' : '';
+        }
+        if (messageElem) messageElem.textContent = message;
+        if (helpElem) helpElem.textContent = help;
+    }
+
     function renderGenreButton(button, genre) {
         const icon = document.createElement('span');
         icon.className = 'sort-icon';
@@ -153,9 +143,8 @@
             button.classList.remove('active');
             return;
         }
-        if (button.id === 'mobile-genre-button') {
-            icon.textContent = `🏷️ ${genre}`;
-        } else {
+        if (button.id === 'mobile-genre-button') icon.textContent = `🏷️ ${genre}`;
+        else {
             icon.append('🏷️ ');
             const selected = document.createElement('span');
             selected.className = 'selected-genre';
@@ -187,17 +176,13 @@
         });
         document.querySelectorAll('.genre-button').forEach(button => renderGenreButton(button, genre));
         document.body.classList.toggle('sort-by-genre', genre !== 'all');
-        document.querySelectorAll('.sort-button').forEach(btn => {
-            if (btn.dataset.sort === currentSortMethod) btn.classList.add('active');
-            else if (!btn.classList.contains('genre-button')) btn.classList.remove('active');
-        });
-        const term = document.querySelector('.search-input').value.toLowerCase();
-        filterAndSortMedia(term);
-        closeGenreDrawer();
+        const input = document.querySelector('.search-input');
+        filterAndSortMedia(input ? input.value : '');
+        if (typeof closeGenreDrawer === 'function') closeGenreDrawer();
     }
 
     function safeUpdateGenreDropdown(type) {
-        const genres = allGenres[type];
+        const genres = allGenres[type] || {};
         document.querySelectorAll('.genre-menu').forEach(dropdown => {
             dropdown.replaceChildren(createGenreItem('all', 0, currentGenre === 'all'));
             Object.entries(genres).forEach(([genre, count]) => {
@@ -215,14 +200,15 @@
     }
 
     function safeUpdateGenreDrawer(type) {
-        const genres = allGenres[type];
+        const genres = allGenres[type] || {};
         const drawer = document.querySelector('.genre-drawer-content');
+        if (!drawer) return;
         drawer.replaceChildren(createGenreItem('all', 0, currentGenre === 'all'));
         Object.entries(genres).forEach(([genre, count]) => {
             drawer.appendChild(createGenreItem(genre, count, currentGenre === genre));
         });
-        document.querySelector('.genre-drawer-title').textContent =
-            `${type === 'movies' ? 'Movie' : 'TV Show'} Genres`;
+        const title = document.querySelector('.genre-drawer-title');
+        if (title) title.textContent = `${type === 'movies' ? 'Movie' : 'TV Show'} Genres`;
         drawer.querySelectorAll('.genre-item').forEach(item => {
             item.addEventListener('click', () => setGenreFilter(item.dataset.genre));
         });
@@ -251,9 +237,7 @@
             image.dataset.src = url;
             posterContainer.append(placeholder, image);
             imageObserver.observe(image);
-        } else {
-            safeTextPlaceholder(posterContainer, item.title || '');
-        }
+        } else safeTextPlaceholder(posterContainer, item.title || '');
 
         const info = document.createElement('div');
         info.className = 'media-info';
@@ -273,88 +257,201 @@
         return mediaItem;
     }
 
-    function disconnectLoadMoreObserver() {
+    function disconnectObserver() {
         if (loadMoreObserver) loadMoreObserver.disconnect();
         loadMoreObserver = null;
     }
 
-    function renderInBatches(data, type, grid, generation) {
-        let nextIndex = 0;
-        const sentinel = document.createElement('div');
-        sentinel.className = 'large-library-sentinel';
-        sentinel.setAttribute('aria-hidden', 'true');
-        sentinel.style.cssText = 'grid-column:1/-1;height:1px;pointer-events:none;';
-
-        function appendBatch() {
-            if (generation !== renderGeneration) return disconnectLoadMoreObserver();
-            const end = Math.min(nextIndex + batchSize(), data.length);
-            const fragment = document.createDocumentFragment();
-            for (let i = nextIndex; i < end; i += 1) {
-                fragment.appendChild(createMediaCard(data[i], type, i - nextIndex));
-            }
-            nextIndex = end;
-            if (sentinel.parentNode === grid) grid.insertBefore(fragment, sentinel);
-            else grid.appendChild(fragment);
-            if (nextIndex >= data.length) {
-                disconnectLoadMoreObserver();
-                sentinel.remove();
-                return;
-            }
-            if (!sentinel.parentNode) grid.appendChild(sentinel);
-        }
-
-        loadMoreObserver = new IntersectionObserver(entries => {
-            if (entries.some(entry => entry.isIntersecting)) appendBatch();
-        }, { rootMargin: PRELOAD_MARGIN, threshold: 0.01 });
-        appendBatch();
-        if (sentinel.parentNode) loadMoreObserver.observe(sentinel);
+    function contentParts(type) {
+        const content = document.querySelector(`#${type}-content`);
+        return {
+            content,
+            loading: content && content.querySelector('.loading'),
+            grid: content && content.querySelector('.media-grid'),
+            noResults: content && content.querySelector('.no-results')
+        };
     }
 
-    function ultraDisplayMedia(data, type) {
-        renderGeneration += 1;
-        const generation = renderGeneration;
-        disconnectLoadMoreObserver();
-        const content = document.querySelector(`#${type}-content`);
-        const loading = content.querySelector('.loading');
-        const grid = content.querySelector('.media-grid');
-        const noResults = content.querySelector('.no-results');
-        loading.style.display = 'none';
-        grid.replaceChildren();
+    function setLoading(type, message = '') {
+        const { loading, grid, noResults } = contentParts(type);
+        if (grid) grid.style.display = 'none';
+        if (noResults) noResults.classList.remove('active');
+        if (!loading) return;
+        loading.style.display = '';
+        if (message) {
+            const text = document.createElement('div');
+            text.textContent = message;
+            loading.replaceChildren(text);
+        }
+    }
 
+    function currentDataArray(type) {
+        return type === 'movies' ? moviesData : tvShowsData;
+    }
+
+    function replaceCurrentData(type, values) {
+        if (type === 'movies') moviesData = values;
+        else tvShowsData = values;
+    }
+
+    function appendApiItems(type, items) {
+        const data = currentDataArray(type);
+        data.push(...items);
+        const { loading, grid, noResults } = contentParts(type);
+        if (!grid) return;
+        if (loading) loading.style.display = 'none';
+        if (items.length || data.length) {
+            if (noResults) noResults.classList.remove('active');
+            grid.style.display = 'grid';
+            const fragment = document.createDocumentFragment();
+            items.forEach((item, index) => fragment.appendChild(createMediaCard(item, type, index)));
+            const sentinel = grid.querySelector('.large-library-sentinel');
+            if (sentinel) grid.insertBefore(fragment, sentinel);
+            else grid.appendChild(fragment);
+        }
+    }
+
+    function ensureApiSentinel(type, generation) {
+        disconnectObserver();
+        const { grid } = contentParts(type);
+        if (!grid || !apiHasMore || generation !== queryGeneration) return;
+        let sentinel = grid.querySelector('.large-library-sentinel');
+        if (!sentinel) {
+            sentinel = document.createElement('div');
+            sentinel.className = 'large-library-sentinel';
+            sentinel.setAttribute('aria-hidden', 'true');
+            sentinel.style.cssText = 'grid-column:1/-1;height:1px;pointer-events:none;';
+            grid.appendChild(sentinel);
+        }
+        loadMoreObserver = new IntersectionObserver(entries => {
+            if (entries.some(entry => entry.isIntersecting)) loadApiPage(generation);
+        }, { rootMargin: PRELOAD_MARGIN, threshold: 0.01 });
+        loadMoreObserver.observe(sentinel);
+    }
+
+    async function loadApiPage(generation) {
+        if (apiLoading || !apiHasMore || generation !== queryGeneration) return;
+        apiLoading = true;
+        const type = apiActiveType;
+        const sort = sortQuery();
+        const params = new URLSearchParams({
+            type: apiMediaType(type),
+            limit: String(PAGE_SIZE),
+            offset: String(apiNextOffset),
+            sort: sort.sort,
+            order: sort.order
+        });
+        if (apiSearch) params.set('q', apiSearch);
+        if (currentGenre && currentGenre !== 'all') params.set('genre', currentGenre);
+        try {
+            const response = await fetch(`/api/items?${params}`, { cache: 'no-store' });
+            if (!response.ok) throw new Error(`catalogue API returned ${response.status}`);
+            const payload = await response.json();
+            if (generation !== queryGeneration) return;
+            const items = Array.isArray(payload.items) ? payload.items : [];
+            appendApiItems(type, items);
+            apiHasMore = Boolean(payload.hasMore);
+            apiNextOffset = payload.nextOffset == null ? apiNextOffset + items.length : payload.nextOffset;
+            const { grid, noResults } = contentParts(type);
+            const sentinel = grid && grid.querySelector('.large-library-sentinel');
+            if (sentinel) sentinel.remove();
+            if (!currentDataArray(type).length) {
+                setNoResultsMessage(contentParts(type).content, type, apiSearch);
+                if (noResults) noResults.classList.add('active');
+                if (grid) grid.style.display = 'none';
+            }
+            ensureApiSentinel(type, generation);
+        } catch (error) {
+            console.error('Catalogue API page failed:', error);
+            if (generation === queryGeneration && !currentDataArray(type).length) {
+                setLoading(type, 'Catalogue service is starting…');
+            }
+        } finally {
+            apiLoading = false;
+        }
+    }
+
+    async function resetApiQuery(searchTerm) {
+        queryGeneration += 1;
+        const generation = queryGeneration;
+        disconnectObserver();
+        apiLoading = false;
+        apiHasMore = true;
+        apiNextOffset = 0;
+        apiSearch = String(searchTerm || '').trim();
+        apiActiveType = activeTabType();
+        replaceCurrentData(apiActiveType, []);
+        const { grid } = contentParts(apiActiveType);
+        if (grid) grid.replaceChildren();
+        setLoading(apiActiveType, 'Loading catalogue…');
+        await loadApiPage(generation);
+    }
+
+    async function loadApiGenres() {
+        const entries = await Promise.all(['movies', 'tvshows'].map(async type => {
+            const response = await fetch(`/api/genres?type=${apiMediaType(type)}`, { cache: 'no-store' });
+            if (!response.ok) return [type, {}];
+            const payload = await response.json();
+            const values = {};
+            for (const genre of payload.genres || []) values[genre.name] = genre.count;
+            return [type, values];
+        }));
+        for (const [type, genres] of entries) allGenres[type] = genres;
+    }
+
+    function staticDisplayMedia(data, type) {
+        const { loading, grid, noResults, content } = contentParts(type);
+        disconnectObserver();
+        if (loading) loading.style.display = 'none';
+        if (!grid) return;
+        grid.replaceChildren();
         if (!data.length) {
-            setNoResultsMessage(content, type, document.querySelector('.search-input').value.trim());
-            noResults.classList.add('active');
+            setNoResultsMessage(content, type, document.querySelector('.search-input')?.value || '');
+            if (noResults) noResults.classList.add('active');
             grid.style.display = 'none';
             return;
         }
-        noResults.classList.remove('active');
+        if (noResults) noResults.classList.remove('active');
         grid.style.display = 'grid';
-        renderInBatches(data, type, grid, generation);
+        let index = 0;
+        const appendBatch = () => {
+            const fragment = document.createDocumentFragment();
+            const end = Math.min(index + PAGE_SIZE, data.length);
+            for (; index < end; index += 1) fragment.appendChild(createMediaCard(data[index], type, index));
+            grid.appendChild(fragment);
+            if (index >= data.length) return;
+            const sentinel = document.createElement('div');
+            sentinel.className = 'large-library-sentinel';
+            sentinel.style.cssText = 'grid-column:1/-1;height:1px;';
+            grid.appendChild(sentinel);
+            loadMoreObserver = new IntersectionObserver(entries => {
+                if (!entries.some(entry => entry.isIntersecting)) return;
+                disconnectObserver();
+                sentinel.remove();
+                appendBatch();
+            }, { rootMargin: PRELOAD_MARGIN, threshold: 0.01 });
+            loadMoreObserver.observe(sentinel);
+        };
+        appendBatch();
     }
 
-    function runFilterAndSort(searchTerm) {
-        const activeTab = document.querySelector('.tab.active').dataset.content;
-        const data = activeTab === 'movies' ? moviesData : tvShowsData;
-        const normalized = (searchTerm || '').trim().toLowerCase();
+    function runStaticFilter(searchTerm) {
+        const type = activeTabType();
+        const data = type === 'movies' ? moviesData : tvShowsData;
+        const normalized = String(searchTerm || '').trim().toLowerCase();
         let filtered = data;
-        if (normalized) {
-            filtered = filtered.filter(item => {
-                if (!item.__beyondSearchTitle) item.__beyondSearchTitle = (item.title || '').toLowerCase();
-                return item.__beyondSearchTitle.includes(normalized);
-            });
-        }
-        if (currentGenre !== 'all') {
-            filtered = filtered.filter(item => item.genres && item.genres.includes(currentGenre));
-        }
-        ultraDisplayMedia(sortMedia(filtered, currentSortMethod), activeTab);
+        if (normalized) filtered = filtered.filter(item => String(item.title || '').toLowerCase().includes(normalized));
+        if (currentGenre !== 'all') filtered = filtered.filter(item => item.genres && item.genres.includes(currentGenre));
+        staticDisplayMedia(sortMedia(filtered, currentSortMethod), type);
     }
 
-    function ultraFilterAndSortMedia(searchTerm) {
+    function v2FilterAndSortMedia(searchTerm) {
         clearTimeout(filterTimer);
+        const execute = () => isApiMode() ? resetApiQuery(searchTerm) : runStaticFilter(searchTerm);
         const input = document.querySelector('.search-input');
         const typing = input && document.activeElement === input && Boolean(searchTerm);
-        if (!typing) return runFilterAndSort(searchTerm);
-        filterTimer = setTimeout(() => runFilterAndSort(searchTerm), SEARCH_DEBOUNCE_MS);
+        if (!typing) return execute();
+        filterTimer = setTimeout(execute, SEARCH_DEBOUNCE_MS);
     }
 
     function appendEmptyMessage(container, message) {
@@ -363,13 +460,10 @@
         container.appendChild(empty);
     }
 
-    async function ultraOpenModal(indexItem, type) {
+    async function v2OpenModal(indexItem, type) {
         let item = indexItem;
-        try {
-            item = await loadDetails(indexItem, type);
-        } catch (error) {
-            console.warn('Could not load detail shard:', error);
-        }
+        try { item = await loadDetails(indexItem); }
+        catch (error) { console.warn('Could not load lazy item details:', error); }
 
         const posterContainer = document.querySelector('.modal-poster');
         posterContainer.replaceChildren();
@@ -378,30 +472,16 @@
             const poster = document.createElement('img');
             poster.src = pUrl;
             poster.alt = item.title || '';
-            poster.onerror = function () {
-                this.remove();
-                safeTextPlaceholder(posterContainer, item.title, true);
-            };
+            poster.onerror = function () { this.remove(); safeTextPlaceholder(posterContainer, item.title, true); };
             posterContainer.appendChild(poster);
-        } else {
-            safeTextPlaceholder(posterContainer, item.title, true);
-        }
+        } else safeTextPlaceholder(posterContainer, item.title, true);
 
         const backdrop = document.querySelector('.modal-backdrop');
         backdrop.replaceChildren();
         backdrop.style.backgroundImage = 'none';
         const bUrl = legacyBackdropUrl(item, type);
-        if (bUrl) {
-            const test = new Image();
-            test.onload = () => { backdrop.style.backgroundImage = `url("${bUrl}")`; };
-            test.onerror = () => {
-                const fallback = document.createElement('div');
-                fallback.className = 'backdrop-text-placeholder';
-                fallback.textContent = type === 'movies' ? 'Movie' : 'TV Show';
-                backdrop.replaceChildren(fallback);
-            };
-            test.src = bUrl;
-        } else {
+        if (bUrl) backdrop.style.backgroundImage = `url("${bUrl}")`;
+        else {
             const fallback = document.createElement('div');
             fallback.className = 'backdrop-text-placeholder';
             fallback.textContent = type === 'movies' ? 'Movie' : 'TV Show';
@@ -412,10 +492,8 @@
         document.querySelector('.modal-year').textContent = item.year || '';
         const rating = document.getElementById('modal-rating');
         const duration = document.getElementById('modal-duration');
-        if (item.contentRating) {
-            rating.textContent = item.contentRating;
-            rating.style.display = 'block';
-        } else rating.style.display = 'none';
+        if (item.contentRating) { rating.textContent = item.contentRating; rating.style.display = 'block'; }
+        else rating.style.display = 'none';
 
         let seasons = document.getElementById('modal-seasons');
         let episodes = document.getElementById('modal-episodes');
@@ -426,15 +504,11 @@
             if (episodes) episodes.style.display = 'none';
         } else if (type === 'tvshows') {
             if (!seasons) {
-                seasons = document.createElement('div');
-                seasons.className = 'metadata-item';
-                seasons.id = 'modal-seasons';
+                seasons = document.createElement('div'); seasons.className = 'metadata-item'; seasons.id = 'modal-seasons';
                 duration.parentNode.insertBefore(seasons, duration);
             }
             if (!episodes) {
-                episodes = document.createElement('div');
-                episodes.className = 'metadata-item';
-                episodes.id = 'modal-episodes';
+                episodes = document.createElement('div'); episodes.className = 'metadata-item'; episodes.id = 'modal-episodes';
                 seasons.parentNode.insertBefore(episodes, seasons.nextSibling);
             }
             duration.style.display = 'none';
@@ -442,96 +516,88 @@
             seasons.style.display = item.childCount ? 'block' : 'none';
             episodes.textContent = item.leafCount ? `${item.leafCount} ${item.leafCount === 1 ? 'episode' : 'episodes'}` : '';
             episodes.style.display = item.leafCount ? 'block' : 'none';
-        } else {
-            duration.style.display = 'none';
-            if (seasons) seasons.style.display = 'none';
-            if (episodes) episodes.style.display = 'none';
-        }
+        } else duration.style.display = 'none';
 
         document.getElementById('modal-summary').textContent = item.summary || 'No summary available.';
         const genres = document.getElementById('modal-genres');
         genres.replaceChildren();
-        if (item.genres && item.genres.length) {
-            item.genres.forEach(genre => {
-                const tag = document.createElement('div');
-                tag.className = 'genre-tag';
-                tag.textContent = genre;
-                tag.addEventListener('click', () => { setGenreFilter(genre); closeModal(); });
-                genres.appendChild(tag);
-            });
-        } else appendEmptyMessage(genres, 'No genres available');
+        if (item.genres && item.genres.length) item.genres.forEach(genre => {
+            const tag = document.createElement('div');
+            tag.className = 'genre-tag'; tag.textContent = genre;
+            tag.addEventListener('click', () => { setGenreFilter(genre); closeModal(); });
+            genres.appendChild(tag);
+        }); else appendEmptyMessage(genres, 'No genres available');
 
         const cast = document.getElementById('modal-cast');
         cast.replaceChildren();
-        if (item.actors && item.actors.length) {
-            item.actors.forEach(actor => {
-                const row = document.createElement('div');
-                row.className = 'cast-item';
-                const name = document.createElement('div');
-                name.className = 'cast-name';
-                name.textContent = actor.name || '';
-                const role = document.createElement('div');
-                role.className = 'cast-role';
-                role.textContent = actor.role || '';
-                row.append(name, role);
-                cast.appendChild(row);
-            });
-        } else appendEmptyMessage(cast, 'No cast information available');
+        if (item.actors && item.actors.length) item.actors.forEach(actor => {
+            const row = document.createElement('div'); row.className = 'cast-item';
+            const name = document.createElement('div'); name.className = 'cast-name'; name.textContent = actor.name || '';
+            const role = document.createElement('div'); role.className = 'cast-role'; role.textContent = actor.role || '';
+            row.append(name, role); cast.appendChild(row);
+        }); else appendEmptyMessage(cast, 'No cast information available');
 
         let dateAdded = document.getElementById('modal-added-date');
         if (!dateAdded) {
-            const section = document.createElement('div');
-            section.className = 'modal-section date-section';
-            const heading = document.createElement('div');
-            heading.className = 'modal-section-title';
-            heading.textContent = 'Date Added';
-            dateAdded = document.createElement('div');
-            dateAdded.id = 'modal-added-date';
-            section.append(heading, dateAdded);
-            document.querySelector('.modal-body').appendChild(section);
+            const section = document.createElement('div'); section.className = 'modal-section date-section';
+            const heading = document.createElement('div'); heading.className = 'modal-section-title'; heading.textContent = 'Date Added';
+            dateAdded = document.createElement('div'); dateAdded.id = 'modal-added-date';
+            section.append(heading, dateAdded); document.querySelector('.modal-body').appendChild(section);
         }
         dateAdded.textContent = item.addedAt ? formatDate(item.addedAt) : '';
-
         const modalBody = document.querySelector('.modal-body');
-        modalBody.scrollTop = 0;
-        document.body.style.overflow = 'hidden';
-        modalOverlay.classList.add('active');
-        requestAnimationFrame(() => { modalBody.scrollTop = 0; });
+        modalBody.scrollTop = 0; document.body.style.overflow = 'hidden'; modalOverlay.classList.add('active');
     }
 
-    async function ultraLoadMedia() {
+    async function v2LoadMedia() {
         try {
-            const indexes = await resolveIndexes();
+            const hinted = hintedServerType();
+            if (hinted === 'jellyfin') {
+                serverType = 'jellyfin';
+                dataBase = '/api';
+                moviesData = [];
+                tvShowsData = [];
+                await loadApiGenres();
+                updateGenreUI(activeTabType());
+                await resetApiQuery(document.querySelector('.search-input')?.value || '');
+                return;
+            }
+            const indexes = await resolveStaticIndexes();
             moviesData = indexes.movies;
             tvShowsData = indexes.tvshows;
             allGenres.movies = extractGenres(moviesData, 'movies');
             allGenres.tvshows = extractGenres(tvShowsData, 'tvshows');
-            updateGenreUI('movies');
-            filterAndSortMedia('');
+            updateGenreUI(activeTabType());
+            runStaticFilter('');
         } catch (error) {
-            console.error('Error loading media indexes:', error);
-            for (const selector of ['#movies-content .loading', '#tvshows-content .loading']) {
-                const loading = document.querySelector(selector);
-                loading.replaceChildren();
-                const message = document.createElement('div');
-                message.className = 'error';
-                message.textContent = 'Failed to load media data. Please try again later.';
-                loading.appendChild(message);
-            }
+            console.error('Error loading catalogue:', error);
+            setLoading(activeTabType(), 'Catalogue service is starting…');
         }
     }
+
+    document.querySelectorAll('.tab').forEach(tab => {
+        tab.addEventListener('click', () => {
+            if (!isApiMode()) return;
+            setTimeout(() => {
+                currentGenre = 'all';
+                updateGenreUI(activeTabType());
+                resetApiQuery(document.querySelector('.search-input')?.value || '');
+            }, 0);
+        });
+    });
 
     createTextPlaceholder = (container, title) => safeTextPlaceholder(container, title);
     setGenreFilter = safeSetGenreFilter;
     updateGenreDropdown = safeUpdateGenreDropdown;
     updateGenreDrawer = safeUpdateGenreDrawer;
-    displayMedia = ultraDisplayMedia;
-    filterAndSortMedia = ultraFilterAndSortMedia;
-    openModal = ultraOpenModal;
-    loadMedia = ultraLoadMedia;
+    displayMedia = staticDisplayMedia;
+    filterAndSortMedia = v2FilterAndSortMedia;
+    openModal = v2OpenModal;
+    loadMedia = v2LoadMedia;
 
     window.__beyondGlimpseLargeLibraryReady = true;
     window.__beyondGlimpseMetadataSafe = true;
     window.__beyondGlimpseUltraLight = true;
+    window.__beyondGlimpseCatalogueService = true;
     window.dispatchEvent(new Event('beyond-glimpse:ready'));
 })();
