@@ -36,12 +36,22 @@ services:
       - EMBY_USER_ID=
 
       # Large-library artwork settings
+      - PAGE_SIZE=500
       - POSTER_MAX_WIDTH=500
       - BACKDROP_MAX_WIDTH=1280
       - IMAGE_QUALITY=82
       # Backdrops consume far more disk than posters and are not required to browse.
       # Set true only if you specifically want modal backdrop images cached locally.
       - DOWNLOAD_BACKDROPS=false
+
+      # Jellyfin incremental sync settings
+      # Normal scheduled runs ask Jellyfin only for metadata saved since the last
+      # successful watermark. A periodic full pass reconciles deleted/moved titles.
+      - INCREMENTAL_SYNC=true
+      - FULL_RECONCILE_HOURS=24
+      # Intentional overlap protects against timestamp precision/clock-edge misses.
+      - SYNC_OVERLAP_SECONDS=300
+      - FORCE_FULL_SYNC=false
 
       # General Configuration
       - CRON_SCHEDULE=0 */6 * * * # Default: every 6 hours
