@@ -2,7 +2,7 @@
 // Catalogue JSON and media artwork deliberately stay out of Cache Storage.
 
 const CACHE_NAME = 'beyond-glimpse-shell-v8';
-const SHELL_ASSETS = ['/manifest.json', '/offline.html', '/large-library.js?v=1'];
+const SHELL_ASSETS = ['/manifest.json', '/offline.html', '/large-library.js?v=2'];
 
 self.addEventListener('install', event => {
     event.waitUntil(
