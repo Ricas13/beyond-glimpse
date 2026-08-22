@@ -1,0 +1,10 @@
+# Local deployment secrets/state
+.env
+.env.*
+!.env.traefik.example
+data/
+state/
+
+# Python
+__pycache__/
+*.py[cod]
