@@ -1,6 +1,8 @@
 import importlib.util
+import json
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -13,7 +15,7 @@ JellyfinDataFetcher = module.JellyfinDataFetcher
 
 
 class JellyfinDataFetcherTests(unittest.TestCase):
-    def make_fetcher(self, server_type="jellyfin"):
+    def make_fetcher(self, server_type="jellyfin", **kwargs):
         tempdir = tempfile.TemporaryDirectory()
         self.addCleanup(tempdir.cleanup)
         fetcher = JellyfinDataFetcher(
@@ -21,6 +23,7 @@ class JellyfinDataFetcherTests(unittest.TestCase):
             "secret-token",
             output_dir=tempdir.name,
             server_type=server_type,
+            **kwargs,
         )
         return fetcher, Path(tempdir.name)
 
@@ -88,22 +91,20 @@ class JellyfinDataFetcherTests(unittest.TestCase):
     def test_state_is_stored_outside_public_output_tree(self):
         fetcher, root = self.make_fetcher()
         self.assertFalse(fetcher.image_state_file.is_relative_to(root))
-        self.assertEqual(fetcher.image_state_file.name, "image-state.json")
+        self.assertFalse(fetcher.catalog_db_file.is_relative_to(root))
 
     def test_backdrops_are_disabled_by_default(self):
         fetcher, _ = self.make_fetcher()
         self.assertFalse(fetcher.download_backdrops)
 
-    def test_legacy_public_state_is_migrated_then_removed(self):
+    def test_legacy_public_state_can_be_loaded_for_migration(self):
         tempdir = tempfile.TemporaryDirectory()
         self.addCleanup(tempdir.cleanup)
         root = Path(tempdir.name)
         output = root / "data" / "jellyfin"
         output.mkdir(parents=True)
         legacy_state = output / "image-state.json"
-        legacy_checksums = output / "checksums.pkl"
         legacy_state.write_text('{"posters/movies/a.jpg":{"tag":"old"}}', encoding="utf-8")
-        legacy_checksums.write_bytes(b"legacy")
 
         fetcher = JellyfinDataFetcher(
             "http://example.test:8096",
@@ -112,12 +113,143 @@ class JellyfinDataFetcherTests(unittest.TestCase):
             server_type="jellyfin",
         )
         self.assertIn("posters/movies/a.jpg", fetcher.image_state)
-        fetcher.atomic_write_json(fetcher.image_state_file, fetcher.image_state, compact=False)
-        for legacy_path in (fetcher.legacy_image_state_file, fetcher.legacy_checksums_file):
-            legacy_path.unlink(missing_ok=True)
-        self.assertTrue(fetcher.image_state_file.exists())
-        self.assertFalse(legacy_state.exists())
-        self.assertFalse(legacy_checksums.exists())
+
+    def test_incremental_fetch_uses_min_date_last_saved_without_total_count(self):
+        fetcher, _ = self.make_fetcher(page_size=2)
+        calls = []
+
+        def request_json(path, params=None):
+            calls.append((path, dict(params or {})))
+            return {"Items": [{"Id": "1"}]}
+
+        fetcher.request_json = request_json
+        items = fetcher.fetch_library_content(
+            "user-1",
+            "lib-1",
+            "movie",
+            min_date_last_saved="2026-08-22T10:00:00Z",
+        )
+        self.assertEqual(len(items), 1)
+        self.assertEqual(calls[0][0], "/Items")
+        self.assertEqual(calls[0][1]["UserId"], "user-1")
+        self.assertEqual(calls[0][1]["MinDateLastSaved"], "2026-08-22T10:00:00Z")
+        self.assertEqual(calls[0][1]["EnableTotalRecordCount"], "false")
+
+    def test_first_state_requires_full_reconcile(self):
+        fetcher, _ = self.make_fetcher()
+        connection = fetcher.open_catalog_db()
+        self.addCleanup(connection.close)
+        mode, reason = fetcher.choose_sync_mode(
+            connection,
+            "user-1",
+            [{"id": "lib-1", "name": "Movies", "media_type": "movie"}],
+            datetime(2026, 8, 22, 12, 0, tzinfo=timezone.utc),
+        )
+        self.assertEqual(mode, "full")
+        self.assertIn("schema", reason)
+
+    def test_due_reconciliation_forces_full_sync(self):
+        fetcher, _ = self.make_fetcher(full_reconcile_hours=24)
+        connection = fetcher.open_catalog_db()
+        self.addCleanup(connection.close)
+        now = datetime(2026, 8, 22, 12, 0, tzinfo=timezone.utc)
+        libraries = [{"id": "lib-1", "name": "Movies", "media_type": "movie"}]
+        fetcher.set_meta(connection, "schema_version", module.CATALOG_SCHEMA_VERSION)
+        fetcher.set_meta(connection, "config_signature", fetcher.config_signature("user-1", libraries))
+        fetcher.set_meta(connection, "watermark", fetcher.format_api_datetime(now - timedelta(hours=1)))
+        fetcher.set_meta(connection, "last_full_reconcile", fetcher.format_api_datetime(now - timedelta(hours=25)))
+        connection.commit()
+        mode, _ = fetcher.choose_sync_mode(connection, "user-1", libraries, now)
+        self.assertEqual(mode, "full")
+
+    def test_incremental_sync_updates_only_changed_rows_and_uses_overlap(self):
+        fetcher, _ = self.make_fetcher(sync_overlap_seconds=300)
+        connection = fetcher.open_catalog_db()
+        self.addCleanup(connection.close)
+
+        old_entry = {
+            "id": "movie-1",
+            "library_id": "lib-1",
+            "media_type": "movie",
+            "media_json": json.dumps({"id": "movie-1", "title": "Old"}, separators=(",", ":")),
+            "poster_tag": None,
+            "backdrop_tag": None,
+        }
+        fetcher.upsert_catalog_entry(connection, old_entry)
+        connection.commit()
+
+        captured = []
+        changed_item = {"Id": "movie-1", "Name": "New", "ImageTags": {}, "BackdropImageTags": []}
+        new_item = {"Id": "movie-2", "Name": "Second", "ImageTags": {}, "BackdropImageTags": []}
+
+        def fetch_content(user_id, library_id, media_type, min_date_last_saved=None):
+            captured.append(min_date_last_saved)
+            return [changed_item, new_item]
+
+        fetcher.fetch_library_content = fetch_content
+        watermark = datetime(2026, 8, 22, 12, 0, tzinfo=timezone.utc)
+        changed = fetcher.run_incremental_sync(
+            connection,
+            "user-1",
+            [{"id": "lib-1", "name": "Movies", "media_type": "movie"}],
+            watermark,
+        )
+        self.assertEqual(changed, 2)
+        self.assertEqual(captured, ["2026-08-22T11:55:00Z"])
+        self.assertEqual(connection.execute("SELECT COUNT(*) FROM items").fetchone()[0], 2)
+        title = json.loads(connection.execute("SELECT media_json FROM items WHERE id='movie-1'").fetchone()[0])["title"]
+        self.assertEqual(title, "New")
+
+    def test_full_reconcile_removes_deleted_items(self):
+        fetcher, _ = self.make_fetcher()
+        connection = fetcher.open_catalog_db()
+        self.addCleanup(connection.close)
+        for item_id in ("movie-1", "movie-2"):
+            fetcher.upsert_catalog_entry(
+                connection,
+                {
+                    "id": item_id,
+                    "library_id": "lib-1",
+                    "media_type": "movie",
+                    "media_json": json.dumps({"id": item_id, "title": item_id}, separators=(",", ":")),
+                    "poster_tag": None,
+                    "backdrop_tag": None,
+                },
+            )
+        connection.commit()
+
+        fetcher.fetch_library_content = lambda *args, **kwargs: [
+            {"Id": "movie-1", "Name": "Still here", "ImageTags": {}, "BackdropImageTags": []}
+        ]
+        fetcher.run_full_reconcile(
+            connection,
+            "user-1",
+            [{"id": "lib-1", "name": "Movies", "media_type": "movie"}],
+        )
+        ids = [row[0] for row in connection.execute("SELECT id FROM items ORDER BY id")]
+        self.assertEqual(ids, ["movie-1"])
+
+    def test_catalogue_state_scales_to_large_synthetic_library(self):
+        fetcher, _ = self.make_fetcher()
+        connection = fetcher.open_catalog_db()
+        self.addCleanup(connection.close)
+        connection.execute("BEGIN")
+        for index in range(10_000):
+            item_id = f"movie-{index:05d}"
+            fetcher.upsert_catalog_entry(
+                connection,
+                {
+                    "id": item_id,
+                    "library_id": "lib-1",
+                    "media_type": "movie",
+                    "media_json": json.dumps({"id": item_id, "title": f"Movie {index}"}, separators=(",", ":")),
+                    "poster_tag": f"tag-{index}",
+                    "backdrop_tag": None,
+                },
+            )
+        connection.commit()
+        self.assertEqual(connection.execute("SELECT COUNT(*) FROM items").fetchone()[0], 10_000)
+        self.assertEqual(len(fetcher.public_catalogue(connection, "movie")), 10_000)
 
 
 if __name__ == "__main__":
