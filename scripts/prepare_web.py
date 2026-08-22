@@ -24,6 +24,7 @@ OLD_SCRIPT_TAGS = (
     '    <script src="/large-library.js?v=5"></script>',
 )
 LIBRARY_BROWSE_TAG = '    <script src="/library-browse.js?v=1"></script>'
+TV_EPISODES_TAG = '    <script src="/tv-episodes.js?v=1"></script>'
 STARTUP_STATUS_TAG = '    <script src="/startup-status.js?v=3"></script>'
 OLD_STARTUP_TAGS = (
     '    <script src="/startup-status.js?v=1"></script>',
@@ -37,7 +38,7 @@ OLD_STARTUP_TAGS = (
 # broken pages can have these tags embedded in the middle of that comment, so
 # this deliberately does not anchor the match to a line boundary.
 RUNTIME_TAG_RE = re.compile(
-    r'[ \t]*<script src="/(?:large-library\.js\?v=\d+|library-browse\.js\?v=\d+|startup-status\.js\?v=\d+)"></script>[ \t]*(?:\r?\n)?'
+    r'[ \t]*<script src="/(?:large-library\.js\?v=\d+|library-browse\.js\?v=\d+|tv-episodes\.js\?v=\d+|startup-status\.js\?v=\d+)"></script>[ \t]*(?:\r?\n)?'
 )
 
 # v2.0.1 briefly used an inline function-toString shim. Remove it during
@@ -124,7 +125,10 @@ def place_runtime_tags(source: str) -> str:
 
     before = source[:body_close].rstrip()
     after = source[body_close:]
-    return f"{before}\n\n{SCRIPT_TAG}\n{LIBRARY_BROWSE_TAG}\n{STARTUP_STATUS_TAG}\n{after}"
+    return (
+        f"{before}\n\n{SCRIPT_TAG}\n{LIBRARY_BROWSE_TAG}\n"
+        f"{TV_EPISODES_TAG}\n{STARTUP_STATUS_TAG}\n{after}"
+    )
 
 
 def prepare(path: Path) -> bool:
