@@ -10,8 +10,20 @@ module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 
 
-def fixture(*lines):
-    return "#!/bin/bash\n" + "\n".join(lines) + "\n" + module.PROXY_MARKER + "\n"
+def fixture(*cron_lines, sync_lines=()):
+    return (
+        "#!/bin/bash\n"
+        + "\n".join(cron_lines)
+        + "\n"
+        + module.APP_TITLE_OLD
+        + "\n"
+        + module.PROXY_MARKER
+        + "\n"
+        + "\n".join(sync_lines)
+        + "\n"
+        + module.SYNC_END_MARKER
+        + "\n"
+    )
 
 
 class PrepareEntrypointTests(unittest.TestCase):
@@ -27,6 +39,8 @@ class PrepareEntrypointTests(unittest.TestCase):
             self.assertIn('/app/scripts/ultralight_jellyfin.py --output /app/data/jellyfin', first)
             self.assertIn('/app/scripts/sync_runner.py --server-type emby', first)
             self.assertIn('/app/scripts/configure_poster_proxy.py', first)
+            self.assertIn('Initial catalogue sync will run in the background under Supervisor', first)
+            self.assertIn(module.APP_TITLE_NEW, first)
             self.assertNotIn('--token', first)
             self.assertFalse(module.prepare(path))
             self.assertEqual(first, path.read_text(encoding="utf-8"))
@@ -40,24 +54,40 @@ class PrepareEntrypointTests(unittest.TestCase):
             self.assertIn('/app/scripts/ultralight_jellyfin.py', content)
             self.assertNotIn('/app/scripts/jellyfin_data_fetcher.py --output /app/data/jellyfin >>', content)
 
-    def test_wraps_initial_sync_without_token_command_arguments(self):
+    def test_removes_blocking_initial_sync_from_entrypoint(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "entrypoint.sh"
             path.write_text(
                 fixture(
                     module.OLD_JELLYFIN,
                     module.OLD_EMBY,
-                    module.INITIAL_JELLYFIN_OLD,
-                    module.INITIAL_EMBY_OLD,
+                    sync_lines=(module.INITIAL_JELLYFIN_OLD, module.INITIAL_EMBY_OLD),
                 ),
                 encoding="utf-8",
             )
             self.assertTrue(module.prepare(path))
             content = path.read_text(encoding="utf-8")
-            self.assertIn(module.INITIAL_JELLYFIN_NEW, content)
-            self.assertIn(module.INITIAL_EMBY_NEW, content)
+            self.assertIn(module.BACKGROUND_SYNC_REPLACEMENT.strip(), content)
+            self.assertNotIn(module.INITIAL_JELLYFIN_NEW, content)
+            self.assertNotIn(module.INITIAL_EMBY_NEW, content)
             self.assertNotIn('jellyfin_data_fetcher.py --url "$JELLYFIN_URL" --token', content)
             self.assertNotIn('jellyfin_data_fetcher.py --url "$EMBY_URL" --token', content)
+
+    def test_rebrands_generated_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "entrypoint.sh"
+            path.write_text(
+                fixture(module.OLD_JELLYFIN, module.OLD_EMBY)
+                + '\n"name": "Glimpse Media Viewer"\n'
+                + '"short_name": "Glimpse"\n'
+                + '"description": "A sleek, responsive web application for browsing your Plex/Jellyfin/Emby media server"\n',
+                encoding="utf-8",
+            )
+            self.assertTrue(module.prepare(path))
+            content = path.read_text(encoding="utf-8")
+            self.assertIn('"name": "$app_title"', content)
+            self.assertIn('"short_name": "$app_title"', content)
+            self.assertIn('storage-efficient media catalogue', content)
 
 
 if __name__ == "__main__":
