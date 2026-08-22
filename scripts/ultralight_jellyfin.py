@@ -332,7 +332,7 @@ def activate_ultralight_mode():
     # The ID-only reconciliation changes maintenance behavior, not public schema,
     # so upgrades do not force another full metadata rebuild.
     base.CATALOG_SCHEMA_VERSION = "2-ultralight"
-    base.APP_VERSION = "1.3"
+    base.APP_VERSION = "1.0.0"
     base.JellyfinDataFetcher.build_catalog_entry = ultralight_build_catalog_entry
     base.JellyfinDataFetcher.populate_expected_image_keys = ultralight_populate_expected_image_keys
     base.JellyfinDataFetcher.write_public_catalogue = ultralight_write_public_catalogue
