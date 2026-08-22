@@ -3,6 +3,7 @@
 import argparse
 import json
 import os
+import sqlite3
 from pathlib import Path
 
 
@@ -46,16 +47,63 @@ def file_size(path: Path):
         return 0
 
 
-def collect(
-    server,
-    data_root=Path("/app/data"),
-    state_root=Path("/app/state"),
-    proxy_cache_root=Path("/var/cache/nginx/posters"),
-):
+def collect_v2(state_dir, proxy_cache_root):
+    db = state_dir / "catalogue-v2.db"
+    state_files, state_bytes = tree_stats(state_dir)
+    proxy_files, proxy_bytes = tree_stats(proxy_cache_root)
+    result = {
+        "server": "jellyfin",
+        "architecture": "catalogue-v2",
+        "state": "never",
+        "movies": 0,
+        "tvShows": 0,
+        "detailRows": 0,
+        "search": "unknown",
+        "stateFiles": state_files,
+        "stateBytes": state_bytes,
+        "databaseBytes": file_size(db),
+        "posterProxyCacheFiles": proxy_files,
+        "posterProxyCacheBytes": proxy_bytes,
+        "posterProxyCacheLimitBytes": 256 * 1024 * 1024,
+        "publicBytes": 0,
+    }
+    if db.exists():
+        connection = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=10)
+        try:
+            meta = dict(connection.execute("SELECT key,value FROM meta"))
+            result.update(
+                {
+                    "state": meta.get("sync_state", "starting"),
+                    "bootstrapComplete": meta.get("bootstrap_complete") == "1",
+                    "progressItems": int(meta.get("progress_items", "0") or 0),
+                    "progressLibrary": meta.get("progress_library", ""),
+                    "lastBootstrap": int(meta.get("last_bootstrap", "0") or 0),
+                    "lastIncremental": int(meta.get("last_incremental", "0") or 0),
+                    "lastReconcile": int(meta.get("last_reconcile", "0") or 0),
+                    "watermark": int(meta.get("watermark", "0") or 0),
+                    "search": "fts5" if meta.get("fts_enabled") == "1" else "like",
+                    "syncError": meta.get("sync_error", ""),
+                }
+            )
+            result["movies"] = connection.execute(
+                "SELECT COUNT(*) FROM items WHERE media_type='movie'"
+            ).fetchone()[0]
+            result["tvShows"] = connection.execute(
+                "SELECT COUNT(*) FROM items WHERE media_type='tvshow'"
+            ).fetchone()[0]
+            result["detailRows"] = connection.execute(
+                "SELECT COUNT(*) FROM item_details"
+            ).fetchone()[0]
+        finally:
+            connection.close()
+    result["totalAppStorageBytes"] = state_bytes + proxy_bytes
+    return result
+
+
+def collect_legacy(server, data_root, state_root, proxy_cache_root):
     data_dir = data_root / server
     state_dir = state_root / server
     status = read_json(state_dir / "sync-status.json")
-
     poster_files, poster_bytes = tree_stats(data_dir / "posters")
     backdrop_files, backdrop_bytes = tree_stats(data_dir / "backdrops")
     detail_files, detail_bytes = tree_stats(data_dir / "details")
@@ -63,11 +111,11 @@ def collect(
     proxy_files, proxy_bytes = tree_stats(proxy_cache_root) if server == "jellyfin" else (0, 0)
     movies_json_bytes = file_size(data_dir / "movies.json")
     tvshows_json_bytes = file_size(data_dir / "tvshows.json")
-
     result = dict(status)
     result.update(
         {
             "server": server,
+            "architecture": "legacy-static",
             "posterFiles": poster_files,
             "posterBytes": poster_bytes,
             "posterProxyCacheFiles": proxy_files,
@@ -88,42 +136,43 @@ def collect(
     return result
 
 
+def collect(server, data_root=Path("/app/data"), state_root=Path("/app/state"), proxy_cache_root=Path("/var/cache/nginx/posters")):
+    if server == "jellyfin" and (state_root / "jellyfin" / "catalogue-v2.db").exists():
+        return collect_v2(state_root / "jellyfin", proxy_cache_root)
+    return collect_legacy(server, data_root, state_root, proxy_cache_root)
+
+
 def print_text(data):
-    print(f"Beyond Glimpse status — {data.get('server', 'unknown')}")
-    print(f"Sync: {data.get('state', 'never')} {data.get('mode') or ''}".rstrip())
-    if data.get("completedAt"):
-        print(f"Completed: {data['completedAt']} in {data.get('durationSeconds', '?')}s")
-    if data.get("reason"):
-        print(f"Reason: {data['reason']}")
+    print(f"Beyond Glimpse status — {data.get('server', 'unknown')} [{data.get('architecture', 'unknown')}]")
+    print(f"Sync: {data.get('state', 'never')}")
     print(f"Catalogue: {data.get('movies', 0):,} movies | {data.get('tvShows', 0):,} TV shows")
-    if data.get("changedRecords") is not None:
-        print(f"Changed records: {data['changedRecords']:,}")
 
-    reconciliation = data.get("idReconciliation")
-    if reconciliation:
+    if data.get("architecture") == "catalogue-v2":
         print(
-            "ID reconciliation: "
-            f"{reconciliation.get('currentIds', 0):,} current | "
-            f"{reconciliation.get('deleted', 0):,} deleted | "
-            f"{reconciliation.get('new', 0):,} new | "
-            f"{reconciliation.get('moved', 0):,} moved"
+            f"Bootstrap: {'complete' if data.get('bootstrapComplete') else 'in progress'} | "
+            f"progress {data.get('progressItems', 0):,} items"
+            + (f" | {data.get('progressLibrary')}" if data.get('progressLibrary') else "")
         )
-    if data.get("lastIdReconcile"):
-        print(f"Last ID reconciliation: {data['lastIdReconcile']}")
-    elif data.get("lastFullReconcile"):
-        print(f"Last deletion reconciliation: {data['lastFullReconcile']}")
-    if data.get("watermark"):
-        print(f"Watermark: {data['watermark']}")
+        print(
+            f"Search: {data.get('search')} | cached rich details: {data.get('detailRows', 0):,}"
+        )
+        print(
+            "Storage: "
+            f"database {human_bytes(data.get('databaseBytes'))} | "
+            f"state total {human_bytes(data.get('stateBytes'))}"
+        )
+        if data.get("syncError"):
+            print(f"Last sync error: {data['syncError']}")
+    else:
+        index_bytes = (data.get("moviesJsonBytes") or 0) + (data.get("tvShowsJsonBytes") or 0)
+        print(
+            "Storage: "
+            f"indexes {human_bytes(index_bytes)} | "
+            f"details {human_bytes(data.get('detailBytes'))} | "
+            f"local posters {human_bytes(data.get('posterBytes'))} | "
+            f"state {human_bytes(data.get('stateBytes'))}"
+        )
 
-    index_bytes = (data.get("moviesJsonBytes") or 0) + (data.get("tvShowsJsonBytes") or 0)
-    print(
-        "Storage: "
-        f"indexes {human_bytes(index_bytes)} | "
-        f"details {human_bytes(data.get('detailBytes'))} ({data.get('detailFiles', 0):,} shards) | "
-        f"local posters {human_bytes(data.get('posterBytes'))} | "
-        f"backdrops {human_bytes(data.get('backdropBytes'))} | "
-        f"state {human_bytes(data.get('stateBytes'))}"
-    )
     if data.get("posterProxyCacheLimitBytes"):
         print(
             "Poster proxy cache: "
@@ -132,11 +181,6 @@ def print_text(data):
             f"({data.get('posterProxyCacheFiles', 0):,} cached files)"
         )
     print(f"Total app storage: {human_bytes(data.get('totalAppStorageBytes'))}")
-
-    if data.get("state") == "failed":
-        print(f"Exit code: {data.get('exitCode')}")
-        for line in data.get("lastOutput") or []:
-            print(f"  {line}")
 
 
 def main():
@@ -148,7 +192,6 @@ def main():
     )
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
-
     data = collect(args.server)
     if args.json:
         print(json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True))
