@@ -35,6 +35,18 @@ Nginx is not a second public reverse proxy in this layout; it is the lightweight
 
 The Traefik compose does **not** publish port 9090 or port 80 on the host. Traefik reaches the container on the shared Docker network.
 
+## First-start behaviour
+
+Nginx and cron start under Supervisor before the one-shot initial catalogue sync. This means `/healthz` becomes available to Docker/Traefik without waiting for a large first import.
+
+On a brand-new install the web UI displays a preparation message while the initial sync runs and retries automatically when the catalogue is ready. On later restarts, an existing good catalogue remains browseable while the startup refresh runs in the background.
+
+Initial sync log:
+
+```bash
+docker exec beyond-glimpse tail -n 100 /var/log/initial-sync.log
+```
+
 ## Ultra-light Jellyfin poster path
 
 Jellyfin posters are not bulk-downloaded during sync. The browser requests a tag-versioned URL such as:
@@ -89,7 +101,7 @@ which returns a small non-sensitive JSON response when the internal Nginx server
 
 The Docker image has a native `HEALTHCHECK`, and the Traefik service definition also checks `/healthz`.
 
-During the first large-library import, Nginx may not start until the initial sync has completed. The container can therefore appear unready during that first import and will automatically become healthy when the web server starts.
+Because Nginx starts before the one-shot initial catalogue sync, the backend can become healthy while a new catalogue is still being prepared. The browser handles that state separately and automatically retries catalogue loading.
 
 ## Nginx security headers and Traefik
 
@@ -132,7 +144,7 @@ The status command reports:
 - last sync state and mode;
 - duration and changed-record count;
 - movie and TV-show counts;
-- incremental watermark and last full reconciliation;
+- incremental watermark and last deletion/ID reconciliation;
 - compact index size;
 - detail-shard count and size;
 - local poster/backdrop storage;
@@ -142,6 +154,23 @@ The status command reports:
 - recent failure output when a sync fails.
 
 Every wrapped sync also emits one single-line `[SYNC SUMMARY]` JSON record to the container/cron log for log collectors.
+
+## Production smoke test
+
+Once the first catalogue is ready:
+
+```bash
+docker exec beyond-glimpse python /app/scripts/smoke_test.py
+```
+
+To validate the public Traefik route too:
+
+```bash
+docker exec beyond-glimpse python /app/scripts/smoke_test.py \
+  --url https://YOUR_HOST
+```
+
+See `docs/PRODUCTION_CHECKLIST.md` for the complete acceptance sequence.
 
 ## Useful operator commands
 
