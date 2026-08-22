@@ -172,6 +172,63 @@ class CatalogueV2Tests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual([item["id"] for item in payload["items"]], ["1"])
 
+    def test_library_filter_scopes_items_and_genres(self):
+        connection, path = self.make_db()
+        for item_id, title, library_id, genre in (
+            ("1", "Library A Drama", "lib-a", "Drama"),
+            ("2", "Library B Comedy", "lib-b", "Comedy"),
+        ):
+            record = core.light_item_from_api(
+                {"Id": item_id, "Name": title, "Genres": [genre]},
+                library_id, "movie", 1,
+            )
+            core.upsert_light_item(connection, record)
+        connection.commit()
+
+        handler = object.__new__(service.CatalogueHandler)
+        handler.send_json = lambda status, payload, **kwargs: (status, payload)
+        with patch.dict(os.environ, {"CATALOGUE_DB": str(path)}, clear=False):
+            status, payload = handler.handle_items(
+                {"type": ["movie"], "library": ["lib-a"], "limit": ["10"]}
+            )
+            genre_status, genre_payload = handler.handle_genres(
+                {"type": ["movie"], "library": ["lib-a"]}
+            )
+
+        self.assertEqual(status, 200)
+        self.assertEqual([item["id"] for item in payload["items"]], ["1"])
+        self.assertEqual(payload["library"], "lib-a")
+        self.assertEqual(genre_status, 200)
+        self.assertEqual(genre_payload["genres"], [{"name": "Drama", "count": 1}])
+
+    def test_library_endpoint_uses_jellyfin_names_and_sqlite_counts(self):
+        connection, path = self.make_db()
+        for item_id, library_id in (("1", "lib-a"), ("2", "lib-a"), ("3", "lib-b")):
+            record = core.light_item_from_api(
+                {"Id": item_id, "Name": f"Movie {item_id}", "Genres": []},
+                library_id, "movie", 1,
+            )
+            core.upsert_light_item(connection, record)
+        connection.commit()
+
+        handler = object.__new__(service.CatalogueHandler)
+        handler.send_json = lambda status, payload, **kwargs: (status, payload)
+        libraries = [
+            {"id": "lib-b", "name": "Kids Movies", "media_type": "movie"},
+            {"id": "lib-a", "name": "Main Movies", "media_type": "movie"},
+            {"id": "tv-a", "name": "Main TV", "media_type": "tvshow"},
+        ]
+        with patch.object(service.CatalogueHandler, "cached_libraries", return_value=libraries):
+            with patch.dict(os.environ, {"CATALOGUE_DB": str(path)}, clear=False):
+                status, payload = handler.handle_libraries({"type": ["movie"]})
+
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["total"], 3)
+        self.assertEqual(
+            [(entry["id"], entry["name"], entry["count"]) for entry in payload["libraries"]],
+            [("lib-b", "Kids Movies", 1), ("lib-a", "Main Movies", 2)],
+        )
+
     def test_rich_detail_parser_is_separate_from_browse_row(self):
         detail = core.detail_from_api(
             {
@@ -200,6 +257,13 @@ class CatalogueV2Tests(unittest.TestCase):
         proxy = (ROOT / "scripts" / "configure_poster_proxy.py").read_text(encoding="utf-8")
         self.assertNotIn("MediaBrowser Token", proxy)
         self.assertIn("/internal/poster/", proxy)
+
+    def test_library_browse_runtime_is_server_side_and_bounded(self):
+        source = (ROOT / "web" / "library-browse.js").read_text(encoding="utf-8")
+        self.assertIn("/api/libraries", source)
+        self.assertIn("url.searchParams.set('library'", source)
+        self.assertNotIn("JELLYFIN_TOKEN", source)
+        self.assertNotIn("JELLYFIN_URL", source)
 
     def test_scheduler_defaults_to_ten_minutes(self):
         source = (ROOT / "scripts" / "catalogue_scheduler.py").read_text(encoding="utf-8")
