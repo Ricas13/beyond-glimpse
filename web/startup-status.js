@@ -59,9 +59,9 @@
                 return;
             }
 
-            // If this page observed the startup refresh, reload the compact indexes
-            // once when it completes. Existing data stays visible until this point.
-            if (state === 'ready' && sawSyncing && !readyReloaded) {
+            // Reload once after an observed background refresh, or if the page
+            // reached a ready state before it ever managed to load a catalogue.
+            if (state === 'ready' && !readyReloaded && (sawSyncing || !hasUsableCatalogue())) {
                 readyReloaded = true;
                 if (typeof loadMedia === 'function') {
                     await loadMedia();
