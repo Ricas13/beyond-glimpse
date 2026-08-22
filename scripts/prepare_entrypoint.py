@@ -23,6 +23,7 @@ INITIAL_EMBY_OLD = '    EMBY_EXCLUDE_LIBRARIES="$EMBY_EXCLUDE_LIBRARIES" $PYTHON
 INITIAL_EMBY_NEW = '    EMBY_EXCLUDE_LIBRARIES="$EMBY_EXCLUDE_LIBRARIES" STATE_DIR="/app/state/emby" $PYTHON_PATH /app/scripts/sync_runner.py --server-type emby --state-dir /app/state/emby --output-dir /app/data/emby -- $PYTHON_PATH /app/scripts/jellyfin_data_fetcher.py --output /app/data/emby'
 
 PROXY_MARKER = 'echo "Running initial data fetch"'
+PROXY_SETUP_MARKER = '# Configure the private Jellyfin poster proxy before Nginx starts.'
 PROXY_SETUP = '''# Configure the private Jellyfin poster proxy before Nginx starts.
 $PYTHON_PATH /app/scripts/configure_poster_proxy.py
 nginx -t
@@ -90,7 +91,7 @@ def prepare(path: Path) -> bool:
     source, initial_emby_changed = replace_optional_many(source, (INITIAL_EMBY_OLD,), INITIAL_EMBY_NEW)
 
     proxy_changed = False
-    if PROXY_SETUP not in source:
+    if PROXY_SETUP_MARKER not in source:
         if PROXY_MARKER not in source:
             raise RuntimeError("Could not find initial data fetch marker in entrypoint.sh")
         source = source.replace(PROXY_MARKER, PROXY_SETUP, 1)
