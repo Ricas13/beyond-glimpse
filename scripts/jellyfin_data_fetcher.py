@@ -36,8 +36,9 @@ class JellyfinDataFetcher:
         poster_max_width=DEFAULT_POSTER_MAX_WIDTH,
         backdrop_max_width=DEFAULT_BACKDROP_MAX_WIDTH,
         image_quality=DEFAULT_IMAGE_QUALITY,
-        download_backdrops=True,
+        download_backdrops=False,
         request_timeout=DEFAULT_REQUEST_TIMEOUT,
+        state_dir=None,
     ):
         self.jellyfin_url = jellyfin_url.rstrip("/")
         self.jellyfin_token = jellyfin_token
@@ -51,7 +52,15 @@ class JellyfinDataFetcher:
         self.image_quality = max(1, min(100, int(image_quality)))
         self.download_backdrops = bool(download_backdrops)
         self.request_timeout = max(1, int(request_timeout))
-        self.image_state_file = self.output_dir / "image-state.json"
+        if state_dir:
+            self.state_dir = Path(state_dir)
+        elif self.output_dir.parent.name == "data":
+            self.state_dir = self.output_dir.parent.parent / "state" / self.output_dir.name
+        else:
+            self.state_dir = self.output_dir.parent / f".{self.output_dir.name}-state"
+        self.image_state_file = self.state_dir / "image-state.json"
+        self.legacy_image_state_file = self.output_dir / "image-state.json"
+        self.legacy_checksums_file = self.output_dir / "checksums.pkl"
         self.image_state = {}
         self.expected_image_keys = set()
 
@@ -98,6 +107,7 @@ class JellyfinDataFetcher:
             self.output_dir / "posters" / "tvshows",
             self.output_dir / "backdrops" / "movies",
             self.output_dir / "backdrops" / "tvshows",
+            self.state_dir,
         ):
             directory.mkdir(parents=True, exist_ok=True)
             self.set_permissions(directory)
@@ -111,10 +121,14 @@ class JellyfinDataFetcher:
             pass
 
     def load_image_state(self):
-        if not self.image_state_file.exists():
+        source = self.image_state_file
+        if not source.exists() and self.legacy_image_state_file.exists():
+            source = self.legacy_image_state_file
+            print(f"Migrating image state from public data path: {source}")
+        if not source.exists():
             return {}
         try:
-            data = json.loads(self.image_state_file.read_text(encoding="utf-8"))
+            data = json.loads(source.read_text(encoding="utf-8"))
             return data if isinstance(data, dict) else {}
         except (OSError, json.JSONDecodeError) as exc:
             print(f"Warning: ignoring invalid image state: {exc}")
@@ -410,6 +424,13 @@ class JellyfinDataFetcher:
         self.atomic_write_json(self.output_dir / "tvshows.json", tvshows_data)
         self.prune_stale_images()
         self.atomic_write_json(self.image_state_file, self.image_state, compact=False)
+        # Remove legacy internal files only after a successful catalogue/state write.
+        for legacy_path in (self.legacy_image_state_file, self.legacy_checksums_file):
+            if legacy_path != self.image_state_file:
+                try:
+                    legacy_path.unlink(missing_ok=True)
+                except OSError as exc:
+                    print(f"Warning: could not remove legacy state file {legacy_path}: {exc}")
 
         print(f"Completed sync: {len(movies_data)} movies, {len(tvshows_data)} TV shows")
 
@@ -459,7 +480,8 @@ def main():
     parser.add_argument("--backdrop-max-width", type=int, default=int(os.environ.get("BACKDROP_MAX_WIDTH", DEFAULT_BACKDROP_MAX_WIDTH)))
     parser.add_argument("--image-quality", type=int, default=int(os.environ.get("IMAGE_QUALITY", DEFAULT_IMAGE_QUALITY)))
     parser.add_argument("--request-timeout", type=int, default=int(os.environ.get("REQUEST_TIMEOUT", DEFAULT_REQUEST_TIMEOUT)))
-    parser.add_argument("--no-backdrops", action="store_true", default=not env_bool("DOWNLOAD_BACKDROPS", True))
+    parser.add_argument("--state-dir", default=os.environ.get("STATE_DIR"))
+    parser.add_argument("--no-backdrops", action="store_true", default=not env_bool("DOWNLOAD_BACKDROPS", False))
     args = parser.parse_args()
 
     if not args.url:
@@ -481,6 +503,7 @@ def main():
         image_quality=args.image_quality,
         download_backdrops=not args.no_backdrops,
         request_timeout=args.request_timeout,
+        state_dir=args.state_dir,
     )
 
     try:
