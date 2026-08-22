@@ -13,8 +13,16 @@ for index, line in enumerate(lines):
         lines[index] = '    echo "# Jellyfin v2 sync is managed by the Supervisor catalogue scheduler" >>/etc/cron.d/media-cron'
         changed += 1
 
+source = "\n".join(lines) + "\n"
+old_count = '            drawer_count=$(grep -c "<!-- Server Drawer Overlay" "$file" 2>/dev/null || echo "0")'
+new_count = '''            drawer_count=$(grep -c "<!-- Server Drawer Overlay" "$file" 2>/dev/null || true)
+            drawer_count=${drawer_count:-0}'''
+if old_count in source:
+    source = source.replace(old_count, new_count, 1)
+    changed += 1
+
+path.write_text(source, encoding="utf-8")
 if changed:
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    print(f"Disabled {changed} legacy Jellyfin cron line(s) for catalogue v2")
+    print(f"Applied {changed} Beyond Glimpse v2 entrypoint finalization change(s)")
 else:
-    print("No legacy Jellyfin cron line remained to disable")
+    print("Beyond Glimpse v2 entrypoint was already finalized")
