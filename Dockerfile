@@ -11,7 +11,7 @@ RUN apt-get update && apt-get install -y \
 RUN pip install requests
 
 # Set up directories
-RUN mkdir -p /app/web /app/data /app/scripts
+RUN mkdir -p /app/web /app/data /app/state /app/scripts
 
 # Copy Python scripts
 COPY scripts/plex_data_fetcher.py /app/scripts/
@@ -38,8 +38,10 @@ RUN chmod +x /app/entrypoint.sh
 RUN touch /etc/cron.d/media-cron
 RUN chmod 0644 /etc/cron.d/media-cron
 
-# Create data directory structure for all three servers
-RUN mkdir -p /app/data/plex /app/data/jellyfin /app/data/emby
+# Create data/state directory structure for all three servers
+RUN mkdir -p \
+    /app/data/plex /app/data/jellyfin /app/data/emby \
+    /app/state/plex /app/state/jellyfin /app/state/emby
 
 WORKDIR /app
 
