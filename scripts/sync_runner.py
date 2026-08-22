@@ -99,6 +99,38 @@ def public_file_snapshot(output_dir: Path):
     }
 
 
+def child_environment(server_type):
+    env = os.environ.copy()
+    # The fetcher supports both products and historically preferred Jellyfin env
+    # variables when both were present. Strip the unrelated product variables so
+    # a multi-server startup can never sync Emby with Jellyfin credentials/URL.
+    if server_type == "emby":
+        for name in (
+            "JELLYFIN_URL",
+            "JELLYFIN_TOKEN",
+            "JELLYFIN_USER_ID",
+            "JELLYFIN_EXCLUDE_LIBRARIES",
+        ):
+            env.pop(name, None)
+    elif server_type == "jellyfin":
+        for name in ("EMBY_URL", "EMBY_TOKEN", "EMBY_USER_ID", "EMBY_EXCLUDE_LIBRARIES"):
+            env.pop(name, None)
+    return env
+
+
+def finish_status(status_path, status, state_dir, output_dir, started, exit_code, last_output=None):
+    status.update(read_catalog_state(state_dir))
+    status.update(public_file_snapshot(output_dir))
+    status["completedAt"] = utc_now_text()
+    status["durationSeconds"] = round(time.monotonic() - started, 3)
+    status["exitCode"] = exit_code
+    status["state"] = "success" if exit_code == 0 else "failed"
+    if exit_code != 0 and last_output:
+        status["lastOutput"] = list(last_output)[-6:]
+    atomic_write_json(status_path, status)
+    print("[SYNC SUMMARY] " + json.dumps(status, ensure_ascii=False, separators=(",", ":")), flush=True)
+
+
 def run(server_type, state_dir: Path, output_dir: Path, command):
     started = time.monotonic()
     status_path = state_dir / "sync-status.json"
@@ -118,13 +150,19 @@ def run(server_type, state_dir: Path, output_dir: Path, command):
     atomic_write_json(status_path, status)
 
     last_output = []
-    process = subprocess.Popen(
-        command,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
-    )
+    try:
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            env=child_environment(server_type),
+        )
+    except OSError as exc:
+        last_output.append(f"Could not start sync process: {exc}")
+        finish_status(status_path, status, state_dir, output_dir, started, 127, last_output)
+        return 127
 
     assert process.stdout is not None
     for line in process.stdout:
@@ -138,18 +176,7 @@ def run(server_type, state_dir: Path, output_dir: Path, command):
                 last_output.pop(0)
 
     exit_code = process.wait()
-    status.update(read_catalog_state(state_dir))
-    status.update(public_file_snapshot(output_dir))
-    status["completedAt"] = utc_now_text()
-    status["durationSeconds"] = round(time.monotonic() - started, 3)
-    status["exitCode"] = exit_code
-    status["state"] = "success" if exit_code == 0 else "failed"
-
-    if exit_code != 0:
-        status["lastOutput"] = last_output[-6:]
-
-    atomic_write_json(status_path, status)
-    print("[SYNC SUMMARY] " + json.dumps(status, ensure_ascii=False, separators=(",", ":")), flush=True)
+    finish_status(status_path, status, state_dir, output_dir, started, exit_code, last_output)
     return exit_code
 
 
