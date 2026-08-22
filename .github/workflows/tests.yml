@@ -17,12 +17,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - name: Install runtime dependency
-        run: python -m pip install requests
+      - name: Install runtime dependencies
+        run: python -m pip install -r requirements.txt
       - name: Compile Python sources
         run: python -m py_compile scripts/*.py
-      - name: Check large-library JavaScript
-        run: node --check web/large-library.js
+      - name: Check browser JavaScript
+        run: |
+          node --check web/large-library.js
+          node --check web/startup-status.js
       - name: Run unit tests
         run: python -m unittest discover -s tests -v
       - name: Build container image
