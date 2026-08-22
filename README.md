@@ -1,535 +1,365 @@
- d# 🎬 Glimpse Media Viewer
+# Beyond Glimpse
 
-A sleek, responsive web application for browsing and viewing your Plex, Jellyfin, or Emby media library content. This dockerized solution fetches metadata and artwork from your media server and presents it in an elegant, user-friendly interface with support for multiple media servers.
+**Beyond Glimpse** is a fast, storage-efficient media catalogue for Jellyfin, with retained Plex and Emby compatibility. It is a performance-focused fork of [Jereme Hancock's Glimpse](https://github.com/jeremehancock/Glimpse), redesigned to remain responsive on very large libraries without permanently storing an artwork copy for every title.
 
-![Glimpse Media Viewer Plex Main](https://raw.githubusercontent.com/jeremehancock/Glimpse/main/assets/screenshot-main-plex-2.png)
+Current release: **v1.0.0**
 
-![Glimpse Media Viewer Plex Details](https://raw.githubusercontent.com/jeremehancock/Glimpse/main/assets/screenshot-details-plex-2.png)
+## Why Beyond Glimpse
 
-![Glimpse Media Viewer Jellyfin Main](https://raw.githubusercontent.com/jeremehancock/Glimpse/main/assets/screenshot-main-jellyfin-2.png)
+The original Glimpse design works well for ordinary libraries, but large catalogues can make full metadata refreshes, artwork storage and browser rendering expensive. Beyond Glimpse keeps the familiar catalogue UI while changing the heavy data paths.
 
-![Glimpse Media Viewer Jellyfin Details](https://raw.githubusercontent.com/jeremehancock/Glimpse/main/assets/screenshot-details-jellyfin-2.png)
+For Jellyfin, the default architecture is now:
 
-![Glimpse Media Viewer Emby Main](https://raw.githubusercontent.com/jeremehancock/Glimpse/main/assets/screenshot-main-emby-2.png)
+```text
+Jellyfin
+   │
+   ├─ changed metadata only ───────────────┐
+   │                                      ▼
+   │                              private SQLite state
+   │                                      │
+   └─ poster only when somebody views it  │
+                                          ▼
+Traefik → Nginx → compact browse indexes + lazy detail shards
+              └→ hard-bounded 256 MiB on-demand poster cache
+```
 
-![Glimpse Media Viewer Emby Details](https://raw.githubusercontent.com/jeremehancock/Glimpse/main/assets/screenshot-details-emby-2.png)
+### Main Jellyfin optimisations
 
-## ✨ Features
+- Incremental metadata sync using Jellyfin's `MinDateLastSaved` support.
+- Server-time watermarks with a safety overlap window.
+- Periodic **ID-only** deletion/move reconciliation instead of recurring full metadata rebuilds.
+- No per-series season/episode request fan-out.
+- No bulk poster download during sync.
+- Posters fetched only when viewed, resized by Jellyfin and cached by Nginx.
+- Hard **256 MiB** poster proxy cache ceiling.
+- Backdrops disabled by default.
+- Compact browse indexes containing only fields required for catalogue browsing/search.
+- Modal-only metadata stored in 256 deterministic lazy detail shards.
+- 96-card desktop / 48-card mobile incremental rendering.
+- Debounced search and bounded DOM growth.
+- Shell-only PWA cache; catalogue/posters are not duplicated into an unbounded browser cache.
+- Atomic catalogue writes, sync locking, retries/backoff and private SQLite state.
 
-- **Modern Interface**: Clean, responsive design that works on mobile and desktop
-- **Multi-Server Support**: Connect to Plex, Jellyfin, Emby, or multiple servers simultaneously
-- **Media Browsing**: View your Movies and TV Shows with poster art
-- **Search Capability**: Quickly find content across your libraries
-- **Detailed View**: See cast information, genres, and descriptions
-- **Watch Movie Trailers**: Preview content directly from the interface
-- **Random Content Selection**: "Roll the Dice" feature for discovering random Movies or TV Shows
-- **Genre Filters**: Easily filter media by genre
-- **Sort A–Z / Z–A**: Alphabetical sorting
-- **Sort by Date Added (Ascending / Descending)**: Sort media by when it was added
-- **Server Toggle**: Switch between multiple configured servers with one click
-- **Automatic Theme Adaptation**: Interface automatically adapts to match your primary server
-- **Library Exclusion**: Selectively exclude specific libraries from being displayed
-- **MD5 Checksum Verification**: Only downloads images when they've changed
-- **Dockerized**: Easy deployment with Docker and Docker Compose
-- **Customizable**: Configure update schedule, app title, and more
-- **Installable as PWA**: Access your media library like a native app on any device
+## Supported media servers
 
-## ❤️ Support this project
+| Server | Support | Optimisation level |
+| --- | --- | --- |
+| Jellyfin | Recommended | Full Beyond Glimpse ultra-light path |
+| Emby | Supported | Retained full-sync/local-artwork path |
+| Plex | Supported | Retained inherited path |
 
-[![Donate](https://raw.githubusercontent.com/jeremehancock/Glimpse/main/assets/donate-button.png)](https://www.buymeacoffee.com/jeremehancock)
+The largest performance/storage improvements currently target Jellyfin.
 
-## 🔧 Prerequisites
+## Recommended deployment: Traefik
 
-- Docker and Docker Compose installed on your host system
-- A running Plex Media Server, Jellyfin Media Server, and/or Emby Media Server
-- Authentication tokens for your media server(s)
-- Basic knowledge of Docker and containerization
+The intended production topology is:
 
-## 🚀 Installation
+```text
+Internet → Traefik (HTTPS/TLS) → Beyond Glimpse Nginx (HTTP :80)
+```
 
-### 1: Grab Docker Compose
+Nginx is the lightweight static/application server **inside** the Beyond Glimpse container. Traefik remains the public reverse proxy and TLS terminator.
 
-Create a directory for your data
+The supplied Traefik compose publishes **no host port**.
+
+### 1. Clone
 
 ```bash
-mkdir -p Glimpse/data
+git clone https://github.com/Ricas13/beyond-glimpse.git
+cd beyond-glimpse
 ```
 
-Create a docker-compose.yml file
+### 2. Create your environment file
 
 ```bash
-curl -o Glimpse/docker-compose.yml https://raw.githubusercontent.com/jeremehancock/Glimpse/main/docker-compose.yml
+cp .env.traefik.example .env
+nano .env
 ```
 
-Change to Glimpse directory
+At minimum configure:
+
+```text
+BEYOND_GLIMPSE_HOST=discover.example.com
+TRAEFIK_NETWORK=media_net
+TRAEFIK_CERTRESOLVER=letsencrypt
+
+PRIMARY_SERVER=jellyfin
+JELLYFIN_URL=http://jellyfin:8096
+JELLYFIN_TOKEN=replace-me
+```
+
+`JELLYFIN_USER_ID` is optional but recommended when you want deterministic user permissions rather than automatic first-user selection.
+
+### 3. Ensure the Traefik network exists
+
+For the default example:
 
 ```bash
-cd Glimpse
+docker network inspect media_net >/dev/null 2>&1 || docker network create media_net
 ```
 
-### 2. Configure Docker Compose
+Traefik itself must also be attached to that external Docker network.
 
-Edit `docker-compose.yml` to set your media server details. You can configure any combination of Plex, Jellyfin, and/or Emby servers:
-
-#### Plex Server Configuration
-
-```yaml
-environment:
-  - PRIMARY_SERVER=plex
-  - PLEX_URL=http://your-plex-server:32400
-  - PLEX_TOKEN=your-plex-token
-  - PLEX_EXCLUDE_LIBRARIES= # Optional: Comma-separated list of library names or IDs to exclude
-  - CRON_SCHEDULE=0 */6 * * * # Update every 6 hours
-  - TZ=UTC # Your timezone
-  - APP_TITLE=Glimpse # Set app title
-  - SORT_BY_DATE_ADDED=false # Sort by date instead of title
-```
-
-#### Jellyfin Server Configuration
-
-```yaml
-environment:
-  - PRIMARY_SERVER=jellyfin
-  - JELLYFIN_URL=http://your-jellyfin-server:8096
-  - JELLYFIN_TOKEN=your-jellyfin-api-token
-  - JELLYFIN_EXCLUDE_LIBRARIES= # Optional: Comma-separated list of library names or IDs to exclude
-  - CRON_SCHEDULE=0 */6 * * * # Update every 6 hours
-  - TZ=UTC # Your timezone
-  - APP_TITLE=Glimpse # Set app title
-  - SORT_BY_DATE_ADDED=false # Sort by date instead of title
-```
-
-#### Emby Server Configuration
-
-```yaml
-environment:
-  - PRIMARY_SERVER=emby
-  - EMBY_URL=http://your-emby-server:8096
-  - EMBY_TOKEN=your-emby-api-token
-  - EMBY_EXCLUDE_LIBRARIES= # Optional: Comma-separated list of library names or IDs to exclude
-  - CRON_SCHEDULE=0 */6 * * * # Update every 6 hours
-  - TZ=UTC # Your timezone
-  - APP_TITLE=Glimpse # Set app title
-  - SORT_BY_DATE_ADDED=false # Sort by date instead of title
-```
-
-#### Multi-Server Configuration
-
-To configure multiple servers, simply include the environment variables for each server you want to use. For example, to use both Plex and Jellyfin:
-
-```yaml
-environment:
-  - PRIMARY_SERVER=plex # Which server to show by default
-  - PLEX_URL=http://your-plex-server:32400
-  - PLEX_TOKEN=your-plex-token
-  - PLEX_EXCLUDE_LIBRARIES=Adult Movies,Personal Collection
-  - JELLYFIN_URL=http://your-jellyfin-server:8096
-  - JELLYFIN_TOKEN=your-jellyfin-api-token
-  - JELLYFIN_EXCLUDE_LIBRARIES=XXX Content,Private Shows
-  - CRON_SCHEDULE=0 */6 * * * # Update every 6 hours
-  - TZ=UTC # Your timezone
-  - APP_TITLE=Glimpse # Set app title
-  - SORT_BY_DATE_ADDED=false # Sort by date instead of title
-```
-
-### 3. Start the Container
+### 4. Build and start
 
 ```bash
-docker-compose up -d
+docker compose -f docker-compose.traefik.yml up -d --build
 ```
 
-### 4. Access the Web Interface
+Nginx starts **before** the first catalogue sync. This means Docker/Traefik health becomes available immediately even when the initial import is large.
 
-Open your browser and navigate to:
+On a brand-new deployment the browser shows:
 
-```
-http://your-server:9090
-```
-
-## ⚙️ Configuration Options
-
-### Environment Variables
-
-| Variable                     | Description                               | Default                       | Required          |
-| ---------------------------- | ----------------------------------------- | ----------------------------- | ----------------- |
-| `PRIMARY_SERVER`             | Which server to show by default           | `plex`                        | No                |
-| `PLEX_URL`                   | URL of your Plex server                   | _None_                        | If using Plex     |
-| `PLEX_TOKEN`                 | Authentication token for Plex             | _None_                        | If using Plex     |
-| `PLEX_EXCLUDE_LIBRARIES`     | Libraries to exclude from Plex            | _None_                        | No                |
-| `JELLYFIN_URL`               | URL of your Jellyfin server               | _None_                        | If using Jellyfin |
-| `JELLYFIN_TOKEN`             | API token for Jellyfin                    | _None_                        | If using Jellyfin |
-| `JELLYFIN_EXCLUDE_LIBRARIES` | Libraries to exclude from Jellyfin        | _None_                        | No                |
-| `EMBY_URL`                   | URL of your Emby server                   | _None_                        | If using Emby     |
-| `EMBY_TOKEN`                 | API token for Emby                        | _None_                        | If using Emby     |
-| `EMBY_EXCLUDE_LIBRARIES`     | Libraries to exclude from Emby            | _None_                        | No                |
-| `CRON_SCHEDULE`              | When to update data (cron format)         | `0 */6 * * *` (every 6 hours) | No                |
-| `TZ`                         | Timezone for scheduled tasks              | `UTC`                         | No                |
-| `APP_TITLE`                  | Custom title for the application          | `Glimpse`                     | No                |
-| `SORT_BY_DATE_ADDED`         | Sort items by date added instead of title | `false`                       | No                |
-
-### Library Exclusion
-
-You can exclude specific libraries from being displayed in Glimpse. This is useful for:
-
-- Adult content libraries
-- Test or development libraries
-- Personal or private collections
-- Music libraries (if not supported)
-- Any content you don't want visible in the interface
-
-#### Configuration Format
-
-Exclusion lists are comma-separated and can include library names or IDs:
-
-```yaml
-# Exclude by library name (case-sensitive)
-- PLEX_EXCLUDE_LIBRARIES=Adult Movies,Personal Collection,Test Library
-
-# Exclude by library ID
-- JELLYFIN_EXCLUDE_LIBRARIES=1,5,12
-
-# Mixed names and IDs
-- EMBY_EXCLUDE_LIBRARIES=Adult Movies,5,Personal Collection
+```text
+Catalogue is being prepared… This page will update automatically.
 ```
 
-#### Finding Library Names
+The page retries automatically when the first import finishes. On later restarts, the previous good catalogue remains browseable while the startup refresh runs in the background.
 
-**Plex:**
+## Direct-port deployment
 
-1. Open Plex Web interface
-2. Go to Settings > Libraries
-3. Library names are displayed in the list
-
-**Jellyfin:**
-
-1. Open Jellyfin Web interface
-2. Go to Dashboard > Libraries
-3. Library names are shown in the list
-
-**Emby:**
-
-1. Open Emby Web interface
-2. Go to Dashboard > Libraries
-3. Library names are visible in the management interface
-
-### Server Configuration Notes
-
-- **Single Server**: Configure only one server's credentials. The app will automatically detect and use the available server.
-- **Multi-Server**: Configure credentials for any combination of servers. The app will show a dropdown to switch between servers.
-- **Primary Server**: When multiple servers are configured, `PRIMARY_SERVER` determines which one is shown by default and affects the app's theme.
-- **Automatic Detection**: If `PRIMARY_SERVER` is set incorrectly or credentials are missing, the app will automatically detect and switch to an available server.
-- **Clean Data Updates**: When libraries are excluded, the fetchers automatically clean existing data files to ensure excluded content doesn't persist.
-
-### Finding Your Plex Token
-
-You can find your Plex authentication token (X-Plex-Token) by following these steps:
-
-1. Log in to your Plex Web App
-2. Browse to any media item
-3. Click the 3 dots menu and select "Get Info"
-4. In the info dialog, click "View XML"
-5. In the URL of the new tab, find the "X-Plex-Token=" parameter
-
-For more detailed instructions, visit the [Plex support article](https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/).
-
-### Finding Your Jellyfin API Token
-
-To get your Jellyfin API token:
-
-1. Log in to your Jellyfin Web Interface
-2. Go to **Administration** → **Dashboard**
-3. Navigate to **Advanced** → **API Keys**
-4. Click **+** to create a new API key
-5. Give it a name (e.g., "Glimpse Media Viewer")
-6. Copy the generated API key
-
-Alternatively, you can find your API token in the Jellyfin server logs when you first authenticate, or use the Jellyfin API documentation to generate one programmatically.
-
-### Finding Your Emby API Token
-
-To get your Emby API token:
-
-1. Log in to your Emby Web Interface
-2. Go to **Settings** → **Advanced** → **API Keys**
-3. Click **New API Key**
-4. Give it a name (e.g., "Glimpse Media Viewer")
-5. Copy the generated API key
-
-Alternatively, you can create an API key through the Emby server settings or by using the Emby API documentation.
-
-## 🏗️ Project Structure
-
-```
-Glimpse/
-│
-├── docker-compose.yml        # Docker Compose configuration
-├── Dockerfile                # Docker build configuration
-│
-├── scripts/
-│   ├── plex_data_fetcher.py  # Python script to fetch Plex data
-│   └── jellyfin_data_fetcher.py # Python script to fetch Jellyfin/Emby data
-│
-├── web/
-│   ├── index.html            # Frontend web interface
-│   ├── manifest.json         # PWA manifest file
-│   ├── sw.js                 # Service worker for PWA functionality
-│   ├── offline.html          # Offline fallback page
-│   └── images/               # Icons and images
-│       ├── icon.png          # Original app icon
-│       ├── android-chrome-192x192.png  # App icon (192×192)
-│       ├── android-chrome-512x512.png  # App icon (512×512)
-│       ├── apple-touch-icon.png        # Apple Touch icon (180x180)
-│       ├── favicon.ico                 # Favicon
-│       ├── favicon-16x16.png           # Favicon (16x16)
-│       ├── favicon-32x32.png           # Favicon (32x32)
-│       ├── icons/                      # Server icons for dropdown menus
-│       │   ├── plex.png                # Plex server icon
-│       │   ├── jellyfin.png            # Jellyfin server icon
-│       │   └── emby.png                # Emby server icon
-│       ├── jellyfin/                   # Jellyfin-specific themed icons
-│       │   ├── android-chrome-192x192.png
-│       │   ├── android-chrome-512x512.png
-│       │   └── apple-touch-icon.png
-│       └── emby/                       # Emby-specific themed icons
-│           ├── android-chrome-192x192.png
-│           ├── android-chrome-512x512.png
-│           └── apple-touch-icon.png
-│
-├── config/
-│   ├── entrypoint.sh         # Container entrypoint script
-│   ├── nginx.conf            # Nginx configuration
-│   └── supervisord.conf      # Supervisor configuration
-│
-└── data/                     # Persistent data directory
-    ├── plex/                 # Plex server data
-    │   ├── movies.json       # Plex movie metadata
-    │   ├── tvshows.json      # Plex TV show metadata
-    │   ├── checksums.pkl     # MD5 checksums for Plex artwork
-    │   ├── posters/          # Plex movie and TV show posters
-    │   └── backdrops/        # Plex movie and TV show backgrounds
-    ├── jellyfin/             # Jellyfin server data
-    │   ├── movies.json       # Jellyfin movie metadata
-    │   ├── tvshows.json      # Jellyfin TV show metadata
-    │   ├── checksums.pkl     # MD5 checksums for Jellyfin artwork
-    │   ├── posters/          # Jellyfin movie and TV show posters
-    │   └── backdrops/        # Jellyfin movie and TV show backgrounds
-    └── emby/                 # Emby server data
-        ├── movies.json       # Emby movie metadata
-        ├── tvshows.json      # Emby TV show metadata
-        ├── checksums.pkl     # MD5 checksums for Emby artwork
-        ├── posters/          # Emby movie and TV show posters
-        └── backdrops/        # Emby movie and TV show backgrounds
-```
-
-## 🔄 How It Works
-
-1. **Data Fetching**: Python scripts connect to your media server(s) using the provided tokens and fetch metadata for all movies and TV shows.
-2. **Library Filtering**: Excluded libraries are automatically skipped during data fetching, and existing data files are cleaned to ensure consistency.
-3. **Multi-Server Support**: When multiple servers are configured, data is fetched separately and stored in server-specific directories.
-4. **Image Processing**: Media posters and backdrops are downloaded, with MD5 checksums to avoid re-downloading unchanged files.
-5. **Theming**: The interface automatically adapts its theme based on your primary server (Plex orange/yellow, Jellyfin blue, or Emby green).
-6. **Server Switching**: If multiple servers are configured, users can switch between them with a dropdown menu.
-7. **Web Server**: Nginx serves the static web interface and the downloaded data.
-8. **Scheduled Updates**: Cron runs the data fetchers on the configured schedule to keep content up-to-date.
-9. **Persistence**: All data is stored in volumes mapped to your host, ensuring it persists between container restarts.
-
-## 🌐 Customization
-
-### Changing the Update Schedule
-
-Modify the `CRON_SCHEDULE` environment variable in your `docker-compose.yml`:
-
-```yaml
-- CRON_SCHEDULE=0 0 * * * # Once a day at midnight
-```
-
-Common cron patterns:
-
-- `0 */6 * * *` - Every 6 hours
-- `0 0 * * *` - Daily at midnight
-- `0 0 * * 0` - Weekly on Sunday
-- `*/30 * * * *` - Every 30 minutes
-
-### Changing the Port
-
-Modify the `ports` section in `docker-compose.yml`:
-
-```yaml
-ports:
-  - "9090:80" # Change to your desired port
-```
-
-### Customizing the App Title
-
-Set the `APP_TITLE` environment variable:
-
-```yaml
-- APP_TITLE=My Movie Collection
-```
-
-### Setting the Primary Server
-
-When multiple servers are configured, set which one appears by default:
-
-```yaml
-- PRIMARY_SERVER=jellyfin # Options: plex, jellyfin, emby
-```
-
-This affects:
-
-- Which server's content is shown when the app first loads
-- The app's color theme (Plex = orange/yellow, Jellyfin = blue, Emby = green)
-- The default offline page styling
-
-## 🔍 Troubleshooting
-
-### Viewing Logs
-
-View all container logs
+For local testing or deployments without Traefik:
 
 ```bash
-docker-compose logs
+docker compose up -d --build
 ```
 
-Follow logs in real-time
+The default compose publishes:
+
+```text
+http://SERVER_IP:9090
+```
+
+For Internet-facing use, the Traefik deployment is preferred.
+
+## Jellyfin configuration
+
+### Core settings
+
+| Variable | Default | Purpose |
+| --- | ---: | --- |
+| `PRIMARY_SERVER` | `jellyfin` in Traefik example | Default catalogue/server |
+| `JELLYFIN_URL` | — | Jellyfin base URL |
+| `JELLYFIN_TOKEN` | — | Jellyfin API key |
+| `JELLYFIN_USER_ID` | empty | Optional deterministic Jellyfin user |
+| `JELLYFIN_EXCLUDE_LIBRARIES` | empty | Comma-separated library names or IDs |
+| `PAGE_SIZE` | `500` | Metadata page size |
+| `REQUEST_TIMEOUT` | `60` | API request timeout in seconds |
+
+### Ultra-light artwork
+
+| Variable | Default | Purpose |
+| --- | ---: | --- |
+| `POSTER_PROXY_MAX_WIDTH` | `320` | Width requested from Jellyfin when a poster is first viewed |
+| `POSTER_PROXY_QUALITY` | `72` | JPEG quality requested from Jellyfin |
+| `DOWNLOAD_BACKDROPS` | `false` | Whether to persist modal backdrops |
+| `BACKDROP_MAX_WIDTH` | `1280` | Backdrop width if enabled |
+| `IMAGE_QUALITY` | `82` | Persistent backdrop image quality |
+
+Jellyfin posters are **not** bulk-downloaded into `/app/data`. Viewed posters are cached under Nginx's ephemeral cache directory and the cache manager is configured with a hard `max_size=256m`.
+
+The poster URL is image-tag versioned, so a changed Jellyfin poster naturally produces a new cache key.
+
+### Incremental sync
+
+| Variable | Default | Purpose |
+| --- | ---: | --- |
+| `INCREMENTAL_SYNC` | `true` | Enable changed-only Jellyfin metadata sync |
+| `FULL_RECONCILE_HOURS` | `24` | Interval for the lightweight ID inventory |
+| `SYNC_OVERLAP_SECONDS` | `300` | Watermark overlap safety margin |
+| `FORCE_FULL_SYNC` | `false` | Force one true full metadata rebuild |
+| `CRON_SCHEDULE` | `0 */6 * * *` | Scheduled refresh cadence |
+
+Despite the retained compatibility name `FULL_RECONCILE_HOURS`, the normal periodic maintenance operation is now **ID-only**. It requests the current movie/series IDs without extra fields, images, user data or record counts and then:
+
+- removes IDs that disappeared;
+- leaves unchanged IDs alone;
+- fetches full metadata only for genuinely new/moved IDs.
+
+A true full metadata rebuild still occurs when required for correctness, for example a new/schema-changed state DB, changed server/user/library configuration, `INCREMENTAL_SYNC=false`, or `FORCE_FULL_SYNC=true`.
+
+## Storage model
+
+Persistent mounts:
+
+```text
+./data  → /app/data
+./state → /app/state
+```
+
+For Jellyfin, `/app/data/jellyfin` normally contains:
+
+```text
+movies.json               compact browse index
+tvshows.json              compact browse index
+details/movies/*.json     lazy modal detail shards
+details/tvshows/*.json    lazy modal detail shards
+backdrops/                normally empty (disabled by default)
+posters/                  legacy files are pruned; bulk posters are not created
+```
+
+Private state under `/app/state/jellyfin` includes:
+
+```text
+catalog.db
+sync.lock
+sync-status.json
+image-state.json (legacy/artwork state where applicable)
+```
+
+Nginx explicitly blocks private SQLite/state/temp filenames from the public `/data` tree as defence in depth.
+
+## Health and observability
+
+Health endpoint:
+
+```text
+GET /healthz
+```
+
+It contains no library or server secrets.
+
+Docker health:
 
 ```bash
-docker-compose logs -f
+docker inspect --format '{{json .State.Health}}' beyond-glimpse
 ```
 
-View specific service logs
+Human-readable sync/storage status:
 
 ```bash
-docker-compose logs glimpse-media-viewer
+docker exec beyond-glimpse \
+  python /app/scripts/status.py --server jellyfin
 ```
 
-### Manual Data Update
-
-To trigger a data update manually (using your configured exclusions):
-
-**Plex:**
+JSON status:
 
 ```bash
-docker exec glimpse-media-viewer bash -c 'python /app/scripts/plex_data_fetcher.py --url "$PLEX_URL" --token "$PLEX_TOKEN" --output /app/data/plex'
+docker exec beyond-glimpse \
+  python /app/scripts/status.py --server jellyfin --json
 ```
 
-**Jellyfin:**
+The report includes catalogue counts, sync mode/reason, duration, changed records, ID-reconciliation counts, index/detail/state size and poster proxy cache usage.
+
+## Production smoke test
+
+After the first catalogue import:
 
 ```bash
-docker exec glimpse-media-viewer bash -c 'python /app/scripts/jellyfin_data_fetcher.py --url "$JELLYFIN_URL" --token "$JELLYFIN_TOKEN" --output /app/data/jellyfin'
+docker exec beyond-glimpse \
+  python /app/scripts/smoke_test.py
 ```
 
-**Emby:**
+To validate the Traefik route too:
 
 ```bash
-docker exec glimpse-media-viewer bash -c 'python /app/scripts/jellyfin_data_fetcher.py --url "$EMBY_URL" --token "$EMBY_TOKEN" --output /app/data/emby'
+docker exec beyond-glimpse \
+  python /app/scripts/smoke_test.py \
+  --url https://discover.example.com
 ```
 
-To manually specify different exclusions for testing:
+The test validates:
 
-**Plex with custom exclusions:**
+- internal Nginx health;
+- first catalogue completion;
+- compact indexes;
+- a lazy detail shard;
+- a real on-demand poster request through Nginx/Jellyfin;
+- private sync state;
+- optional public Traefik health/homepage.
+
+See [`docs/PRODUCTION_CHECKLIST.md`](docs/PRODUCTION_CHECKLIST.md) for the complete real-server acceptance process.
+
+## Logs
+
+Container logs:
 
 ```bash
-docker exec glimpse-media-viewer bash -c 'python /app/scripts/plex_data_fetcher.py --url "$PLEX_URL" --token "$PLEX_TOKEN" --exclude-libraries "Adult Content" "Personal Files" --output /app/data/plex'
+docker logs beyond-glimpse --tail 200
 ```
 
-**Jellyfin with custom exclusions:**
+Initial/background startup sync:
 
 ```bash
-docker exec glimpse-media-viewer bash -c 'python /app/scripts/jellyfin_data_fetcher.py --url "$JELLYFIN_URL" --token "$JELLYFIN_TOKEN" --exclude-libraries "Adult Content" "Personal Files" --output /app/data/jellyfin'
+docker exec beyond-glimpse tail -n 100 /var/log/initial-sync.log
 ```
 
-**Emby with custom exclusions:**
+Scheduled sync output:
 
 ```bash
-docker exec glimpse-media-viewer bash -c 'python /app/scripts/jellyfin_data_fetcher.py --url "$EMBY_URL" --token "$EMBY_TOKEN" --exclude-libraries "Adult Content" "Personal Files" --output /app/data/emby'
+docker exec beyond-glimpse tail -n 100 /var/log/cron.log
 ```
 
-### Common Issues
+Every wrapped Jellyfin/Emby sync emits a compact `[SYNC SUMMARY]` JSON log line as well as private `sync-status.json` telemetry.
 
-#### Default Nginx Page Shows Instead of the App
-
-If you see the default Nginx welcome page, there might be an issue with the configuration:
-
-Check if the app files are present
+## Updating
 
 ```bash
-docker exec glimpse-media-viewer ls -la /app/web
+cd beyond-glimpse
+git pull
+docker compose -f docker-compose.traefik.yml up -d --build
 ```
 
-Check Nginx configuration
+Catalogue files are written atomically and state is stored separately from public data.
 
-```bash
-docker exec glimpse-media-viewer cat /etc/nginx/conf.d/default.conf
+When upgrading from original Glimpse or an early Beyond Glimpse build, the first Jellyfin run may intentionally perform one full metadata reconciliation to migrate the catalogue schema. It does **not** bulk-download posters. Existing legacy local Jellyfin posters/backdrops are pruned according to the current configuration after a successful sync.
+
+## Recovery
+
+To force one true Jellyfin rebuild:
+
+```text
+FORCE_FULL_SYNC=true
 ```
 
-Restart Nginx
+Redeploy/run the sync, then return it to:
 
-```bash
-docker exec glimpse-media-viewer nginx -s reload
+```text
+FORCE_FULL_SYNC=false
 ```
 
-#### Missing Images
+Do not permanently run forced full syncs on large libraries.
 
-If media images aren't displaying:
+## Security notes
 
-1. Check permissions on the data directory
-2. Ensure the media server is accessible from the container
-3. Verify your server token is valid
-4. Check the container logs for fetch errors
+Beyond Glimpse ships with:
 
-#### Server Toggle Not Appearing
+- Content Security Policy;
+- anti-framing policy;
+- `nosniff`;
+- referrer and permissions policies;
+- Nginx server tokens disabled;
+- private state blocked from public data routes;
+- API tokens excluded from Jellyfin/Emby Python command arguments;
+- pinned Python runtime dependency;
+- no direct host port in the recommended Traefik compose.
 
-If you configured multiple servers but don't see the server dropdown:
+Traefik should own HTTPS/HSTS because it terminates TLS. If Traefik also injects a global CSP, make sure it is compatible with Beyond Glimpse's Nginx CSP: browsers enforce multiple CSP headers together.
 
-1. Verify all server URLs and tokens are correct
-2. Check the container logs for authentication errors
-3. Ensure all servers are accessible from the container
-4. Try restarting the container after fixing configuration
+The container still uses root for Supervisor/cron/master process compatibility; Nginx serves public files through its normal unprivileged worker model. Converting the complete multi-process container to non-root would require a separate process-model redesign and is intentionally not mixed into v1.0.0.
 
-#### Wrong Theme Colors
+See [`docs/SECURITY.md`](docs/SECURITY.md).
 
-If the app shows the wrong theme:
+## Development and CI
 
-1. Check your `PRIMARY_SERVER` setting
-2. Clear your browser cache and reload
-3. Un-install and Re-install PWA
+Pull requests and pushes to `main` run:
 
-#### Library Exclusion Issues
+```text
+Python 3.13 compilation
+JavaScript syntax validation
+unit/regression tests
+full production Docker image build
+Nginx configuration validation
+```
 
-If excluded libraries are still appearing:
+Runtime Python dependencies are pinned in `requirements.txt`.
 
-1. **Check library names**: Ensure the library names match exactly (case-sensitive)
-2. **Verify environment variables**: Check that the exclusion variables are set correctly
-3. **Restart container**: Library exclusions are applied during data fetching, so restart after configuration changes
-4. **Check logs**: Look for exclusion messages in the container logs:
-   ```bash
-   docker-compose logs | grep -i "excluded\|skipping"
-   ```
-5. **Manual data update**: Force a data refresh to apply exclusions immediately
-6. **Try library IDs**: If names don't work, try using library IDs instead
+## Release history
 
-#### Finding Library Information
+See [`CHANGELOG.md`](CHANGELOG.md).
 
-To get detailed library information for troubleshooting exclusions, check the logs during a manual data update. The fetchers will display library names and IDs as they process each one.
+## Upstream and licence
 
-## 🛠️ Advanced Usage
+Beyond Glimpse is derived from the MIT-licensed [Glimpse Media Viewer](https://github.com/jeremehancock/Glimpse) by Jereme Hancock. The original copyright and MIT licence are preserved in [`LICENSE`](LICENSE).
 
-### Using Behind a Reverse Proxy
-
-This application works well behind a reverse proxy like Traefik or Nginx Proxy Manager. Just expose the container port and configure your proxy accordingly.
-
-## 🔐 Security Considerations
-
-- Media server tokens provide access to your media servers. Keep them secure.
-- All data access is read-only, so there's no risk of modifying your media libraries.
-- Consider using a dedicated API token for Glimpse rather than your main user token.
-- Library exclusions help keep sensitive content private and separate from your main viewing interface.
-
-## 📝 License
-
-This project is released under the MIT License. See the `LICENSE` file for details.
-
-## 🤖 AI Disclosure
-
-This project was created with the help of AI.
+Beyond Glimpse changes focus on large-library scalability, storage efficiency, production deployment and security while retaining the original project's interface and multi-server compatibility.
