@@ -11,7 +11,7 @@ spec.loader.exec_module(module)
 
 
 class PrepareWebTests(unittest.TestCase):
-    def test_injects_large_library_bootstrap_once(self):
+    def test_injects_ultralight_bootstrap_once(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "index.html"
             path.write_text(
@@ -24,12 +24,28 @@ class PrepareWebTests(unittest.TestCase):
             self.assertTrue(module.prepare(path))
             first = path.read_text(encoding="utf-8")
             self.assertIn("__startBeyondGlimpseMedia", first)
-            self.assertIn('/large-library.js?v=1', first)
+            self.assertIn('/large-library.js?v=2', first)
 
             self.assertFalse(module.prepare(path))
             second = path.read_text(encoding="utf-8")
             self.assertEqual(first, second)
-            self.assertEqual(second.count('/large-library.js?v=1'), 1)
+            self.assertEqual(second.count('/large-library.js?v=2'), 1)
+
+    def test_upgrades_v1_runtime_tag(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "index.html"
+            path.write_text(
+                "<html><body><script>\n"
+                + module.START_REPLACEMENT
+                + "\n</script>\n"
+                + module.OLD_SCRIPT_TAG
+                + "\n</body></html>",
+                encoding="utf-8",
+            )
+            self.assertTrue(module.prepare(path))
+            content = path.read_text(encoding="utf-8")
+            self.assertIn('/large-library.js?v=2', content)
+            self.assertNotIn('/large-library.js?v=1', content)
 
 
 if __name__ == "__main__":
