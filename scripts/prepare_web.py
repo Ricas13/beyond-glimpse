@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 START_MARKER = "        // Initialize on page load\n        loadMedia();"
-START_REPLACEMENT = """        // Initialize after the large-library renderer has replaced the upstream hot paths.
+START_REPLACEMENT = """        // Initialize after the Beyond Glimpse runtime has replaced the upstream hot paths.
         window.__startBeyondGlimpseMedia = () => {
             if (window.__beyondGlimpseMediaStarted) return;
             window.__beyondGlimpseMediaStarted = true;
@@ -13,7 +13,8 @@ START_REPLACEMENT = """        // Initialize after the large-library renderer ha
         };
         window.addEventListener('beyond-glimpse:ready', window.__startBeyondGlimpseMedia, { once: true });
         setTimeout(window.__startBeyondGlimpseMedia, 3000);"""
-SCRIPT_TAG = '    <script src="/large-library.js?v=1"></script>'
+SCRIPT_TAG = '    <script src="/large-library.js?v=2"></script>'
+OLD_SCRIPT_TAG = '    <script src="/large-library.js?v=1"></script>'
 
 
 def prepare(path: Path) -> bool:
@@ -26,7 +27,10 @@ def prepare(path: Path) -> bool:
     elif START_REPLACEMENT not in source:
         raise RuntimeError("Could not find Glimpse loadMedia initialization marker")
 
-    if SCRIPT_TAG not in source:
+    if OLD_SCRIPT_TAG in source:
+        source = source.replace(OLD_SCRIPT_TAG, SCRIPT_TAG, 1)
+        changed = True
+    elif SCRIPT_TAG not in source:
         if "</body>" not in source:
             raise RuntimeError("Could not find </body> in Glimpse index")
         source = source.replace("</body>", f"{SCRIPT_TAG}\n</body>", 1)
@@ -38,7 +42,7 @@ def prepare(path: Path) -> bool:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Prepare Glimpse web UI for Beyond Glimpse large-library rendering")
+    parser = argparse.ArgumentParser(description="Prepare Glimpse web UI for Beyond Glimpse ultra-light rendering")
     parser.add_argument("path", nargs="?", default="/app/web/index.html")
     args = parser.parse_args()
     path = Path(args.path)
