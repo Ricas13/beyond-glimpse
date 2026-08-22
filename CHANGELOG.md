@@ -2,6 +2,25 @@
 
 All notable Beyond Glimpse changes are documented here.
 
+## 2.0.3 — 2026-08-22
+
+Frontend runtime placement fix for the inherited Glimpse page.
+
+- Fixed the production HTML injector selecting the first literal `</body>` text instead of the real closing body tag.
+- Upstream Glimpse contains an HTML comment that literally mentions `</body>` before the actual page close; earlier v2 builds placed the external runtime script tags inside that comment, so browsers never executed them.
+- Runtime and startup script tags are now normalized and inserted immediately before the final closing `</body>` tag.
+- Existing v2.0.0-v2.0.2 generated pages with misplaced script tags are repaired in place.
+- Bumped the browser runtime/startup URLs and PWA shell cache to force a clean corrected frontend load.
+- Added regression tests reproducing the exact upstream comment and the previously broken generated layout.
+
+## 2.0.2 — 2026-08-22
+
+Browser startup and first-paint improvements.
+
+- Jellyfin detection now reads the credential-free server-themed document title directly instead of relying on a function-source shim.
+- The first paginated Jellyfin media page is requested before genre aggregation so navigation metadata cannot block initial cards.
+- Removed the temporary v2.0.1 server-hint shim during generated-page upgrades.
+
 ## 2.0.1 — 2026-08-22
 
 Browser compatibility fix for the new v2 Jellyfin catalogue service.

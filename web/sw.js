@@ -1,12 +1,12 @@
 // Beyond Glimpse service worker: cache the tiny application shell only.
 // Catalogue API responses and media artwork deliberately stay out of Cache Storage.
 
-const CACHE_NAME = 'beyond-glimpse-shell-v11';
+const CACHE_NAME = 'beyond-glimpse-shell-v12';
 const SHELL_ASSETS = [
     '/manifest.json',
     '/offline.html',
-    '/large-library.js?v=5',
-    '/startup-status.js?v=2'
+    '/large-library.js?v=6',
+    '/startup-status.js?v=3'
 ];
 
 self.addEventListener('install', event => {
