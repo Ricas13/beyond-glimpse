@@ -1,0 +1,41 @@
+services:
+  beyond-glimpse:
+    build:
+      context: .
+    image: beyond-glimpse:local
+    container_name: beyond-glimpse
+    restart: unless-stopped
+
+    # Application/server credentials and sync settings live in .env rather than
+    # being duplicated into this deployment file.
+    env_file:
+      - .env
+
+    volumes:
+      - ./data:/app/data
+      - ./state:/app/state
+
+    # No host port is published. Traefik reaches Nginx directly on the shared
+    # Docker network and terminates HTTPS at the edge.
+    expose:
+      - "80"
+
+    networks:
+      - traefik
+
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=${TRAEFIK_NETWORK:-media_net}"
+      - "traefik.http.routers.beyond-glimpse.rule=Host(`${BEYOND_GLIMPSE_HOST}`)"
+      - "traefik.http.routers.beyond-glimpse.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}"
+      - "traefik.http.routers.beyond-glimpse.tls=true"
+      - "traefik.http.routers.beyond-glimpse.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}"
+      - "traefik.http.services.beyond-glimpse.loadbalancer.server.port=80"
+      - "traefik.http.services.beyond-glimpse.loadbalancer.healthcheck.path=/healthz"
+      - "traefik.http.services.beyond-glimpse.loadbalancer.healthcheck.interval=30s"
+      - "traefik.http.services.beyond-glimpse.loadbalancer.healthcheck.timeout=5s"
+
+networks:
+  traefik:
+    external: true
+    name: ${TRAEFIK_NETWORK:-media_net}

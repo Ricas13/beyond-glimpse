@@ -21,19 +21,46 @@ class PrepareEntrypointTests(unittest.TestCase):
             self.assertIn('FULL_RECONCILE_HOURS=\\"${FULL_RECONCILE_HOURS:-24}\\"', first)
             self.assertIn('SYNC_OVERLAP_SECONDS=\\"${SYNC_OVERLAP_SECONDS:-300}\\"', first)
             self.assertIn('PAGE_SIZE=\\"${PAGE_SIZE:-500}\\"', first)
+            self.assertIn('/app/scripts/sync_runner.py --server-type jellyfin', first)
+            self.assertIn('/app/scripts/sync_runner.py --server-type emby', first)
             self.assertNotIn('--token', first)
             self.assertFalse(module.prepare(path))
             self.assertEqual(first, path.read_text(encoding="utf-8"))
 
-    def test_upgrades_previous_beyond_glimpse_cron_lines(self):
+    def test_upgrades_previous_incremental_cron_lines(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "entrypoint.sh"
-            path.write_text("#!/bin/bash\n" + module.PREVIOUS_JELLYFIN + "\n" + module.PREVIOUS_EMBY + "\n", encoding="utf-8")
+            path.write_text(
+                "#!/bin/bash\n" + module.INCREMENTAL_JELLYFIN + "\n" + module.INCREMENTAL_EMBY + "\n",
+                encoding="utf-8",
+            )
             self.assertTrue(module.prepare(path))
             content = path.read_text(encoding="utf-8")
-            self.assertIn('INCREMENTAL_SYNC=\\"${INCREMENTAL_SYNC:-true}\\"', content)
+            self.assertIn('/app/scripts/sync_runner.py --server-type jellyfin', content)
             self.assertIn('STATE_DIR=\\"/app/state/jellyfin\\"', content)
             self.assertIn('STATE_DIR=\\"/app/state/emby\\"', content)
+
+    def test_wraps_initial_sync_without_token_command_arguments(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "entrypoint.sh"
+            path.write_text(
+                "#!/bin/bash\n"
+                + module.OLD_JELLYFIN
+                + "\n"
+                + module.OLD_EMBY
+                + "\n"
+                + module.INITIAL_JELLYFIN_OLD
+                + "\n"
+                + module.INITIAL_EMBY_OLD
+                + "\n",
+                encoding="utf-8",
+            )
+            self.assertTrue(module.prepare(path))
+            content = path.read_text(encoding="utf-8")
+            self.assertIn(module.INITIAL_JELLYFIN_NEW, content)
+            self.assertIn(module.INITIAL_EMBY_NEW, content)
+            self.assertNotIn('jellyfin_data_fetcher.py --url "$JELLYFIN_URL" --token', content)
+            self.assertNotIn('jellyfin_data_fetcher.py --url "$EMBY_URL" --token', content)
 
 
 if __name__ == "__main__":
