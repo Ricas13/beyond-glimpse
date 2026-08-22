@@ -38,8 +38,13 @@ class PublicWebSecurityTests(unittest.TestCase):
     def test_static_cache_location_does_not_shadow_security_headers(self):
         nginx = (ROOT / "config" / "nginx.conf").read_text(encoding="utf-8")
         static_block = nginx.split("# Set caching for static assets", 1)[1].split("# Never serve", 1)[0]
-        self.assertIn("expires 7d;", static_block)
-        self.assertNotIn("add_header", static_block)
+        directives = [
+            line.strip()
+            for line in static_block.splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        ]
+        self.assertIn("expires 7d;", directives)
+        self.assertFalse(any(line.startswith("add_header ") for line in directives))
 
 
 if __name__ == "__main__":
