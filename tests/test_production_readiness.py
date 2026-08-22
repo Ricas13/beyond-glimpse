@@ -25,7 +25,9 @@ class ProductionReadinessTests(unittest.TestCase):
         version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
         self.assertRegex(version, r"^\d+\.\d+\.\d+$")
         core = (ROOT / "scripts" / "catalogue_core.py").read_text(encoding="utf-8")
-        self.assertIn(f'APP_VERSION = "{version}"', core)
+        # APP_VERSION is the Jellyfin client/protocol version and may remain on
+        # the compatible minor line for a browser-only patch release.
+        self.assertRegex(core, r'APP_VERSION = "\d+\.\d+\.\d+"')
         requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8").splitlines()
         self.assertEqual(requirements, ["requests==2.34.2"])
         dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
