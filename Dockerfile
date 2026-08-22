@@ -24,6 +24,7 @@ COPY scripts/prepare_entrypoint.py /app/scripts/
 COPY scripts/sync_runner.py /app/scripts/
 COPY scripts/status.py /app/scripts/
 COPY scripts/initial_sync.py /app/scripts/
+COPY scripts/smoke_test.py /app/scripts/
 RUN chmod +x /app/scripts/*.py
 
 COPY web/ /app/web/
