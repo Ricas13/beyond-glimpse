@@ -1,13 +1,18 @@
 version: "3"
 
 services:
-  glimpse-media-viewer:
-    image: bozodev/glimpse-media-viewer:latest
-    container_name: glimpse-media-viewer
+  beyond-glimpse:
+    build:
+      context: .
+    image: beyond-glimpse:local
+    container_name: beyond-glimpse
     ports:
       - "9090:80"
     volumes:
+      # Public catalogue data: compact JSON plus optimized poster artwork.
       - ./data:/app/data
+      # Private sync state is deliberately kept outside the Nginx-served data tree.
+      - ./state:/app/state
       # - ./logo.png:/app/web/images/logo.png # Add your logo.png file and uncomment this line to customize the logo
     environment:
       # Primary Media Server Configuration
@@ -22,15 +27,25 @@ services:
       - JELLYFIN_URL=http://your-jellyfin-server:8096
       - JELLYFIN_TOKEN=your-jellyfin-api-token
       - JELLYFIN_EXCLUDE_LIBRARIES= # Comma-separated list of library names or IDs to exclude
+      - JELLYFIN_USER_ID= # Optional: makes catalogue permissions/user selection deterministic
 
       # Emby Configuration
       - EMBY_URL=http://your-emby-server:8096
       - EMBY_TOKEN=your-emby-api-token
       - EMBY_EXCLUDE_LIBRARIES= # Comma-separated list of library names or IDs to exclude
+      - EMBY_USER_ID=
+
+      # Large-library artwork settings
+      - POSTER_MAX_WIDTH=500
+      - BACKDROP_MAX_WIDTH=1280
+      - IMAGE_QUALITY=82
+      # Backdrops consume far more disk than posters and are not required to browse.
+      # Set true only if you specifically want modal backdrop images cached locally.
+      - DOWNLOAD_BACKDROPS=false
 
       # General Configuration
       - CRON_SCHEDULE=0 */6 * * * # Default: every 6 hours
       - TZ=UTC # Set your timezone
-      - APP_TITLE=Glimpse # Set app title
+      - APP_TITLE=Beyond Glimpse # Set app title
       - SORT_BY_DATE_ADDED=false # Sort by date instead of title
     restart: unless-stopped
