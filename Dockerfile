@@ -8,11 +8,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     supervisor \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir requests
+COPY requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r /app/requirements.txt
 
 RUN mkdir -p /app/web /app/data /app/state /app/scripts /var/cache/nginx/posters \
     && chown -R www-data:www-data /var/cache/nginx
 
+COPY VERSION /app/VERSION
 COPY scripts/plex_data_fetcher.py /app/scripts/
 COPY scripts/jellyfin_data_fetcher.py /app/scripts/
 COPY scripts/ultralight_jellyfin.py /app/scripts/
@@ -21,6 +23,7 @@ COPY scripts/prepare_web.py /app/scripts/
 COPY scripts/prepare_entrypoint.py /app/scripts/
 COPY scripts/sync_runner.py /app/scripts/
 COPY scripts/status.py /app/scripts/
+COPY scripts/initial_sync.py /app/scripts/
 RUN chmod +x /app/scripts/*.py
 
 COPY web/ /app/web/
@@ -56,7 +59,7 @@ WORKDIR /app
 
 EXPOSE 80
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1/healthz', timeout=3).read()" || exit 1
 
 ENTRYPOINT ["/app/entrypoint.sh"]
