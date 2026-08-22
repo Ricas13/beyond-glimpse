@@ -17,9 +17,11 @@ RUN mkdir -p /app/web /app/data /app/state /app/scripts
 COPY scripts/plex_data_fetcher.py /app/scripts/
 COPY scripts/jellyfin_data_fetcher.py /app/scripts/
 COPY scripts/prepare_web.py /app/scripts/
+COPY scripts/prepare_entrypoint.py /app/scripts/
 RUN chmod +x /app/scripts/plex_data_fetcher.py
 RUN chmod +x /app/scripts/jellyfin_data_fetcher.py
 RUN chmod +x /app/scripts/prepare_web.py
+RUN chmod +x /app/scripts/prepare_entrypoint.py
 
 # Copy web files and inject the bounded large-library renderer before shipping.
 # Keeping this as a build step lets us retain the upstream UI while replacing
@@ -32,6 +34,7 @@ RUN rm -f /etc/nginx/sites-enabled/default
 COPY config/nginx.conf /etc/nginx/conf.d/default.conf
 COPY config/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 COPY config/entrypoint.sh /app/
+RUN python /app/scripts/prepare_entrypoint.py /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 
 # Create empty crontab file
