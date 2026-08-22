@@ -13,9 +13,13 @@ START_REPLACEMENT = """        // Initialize after the Beyond Glimpse runtime ha
         };
         window.addEventListener('beyond-glimpse:ready', window.__startBeyondGlimpseMedia, { once: true });
         setTimeout(window.__startBeyondGlimpseMedia, 3000);"""
-SCRIPT_TAG = '    <script src="/large-library.js?v=2"></script>'
-OLD_SCRIPT_TAG = '    <script src="/large-library.js?v=1"></script>'
-STARTUP_STATUS_TAG = '    <script src="/startup-status.js?v=1"></script>'
+SCRIPT_TAG = '    <script src="/large-library.js?v=3"></script>'
+OLD_SCRIPT_TAGS = (
+    '    <script src="/large-library.js?v=1"></script>',
+    '    <script src="/large-library.js?v=2"></script>',
+)
+STARTUP_STATUS_TAG = '    <script src="/startup-status.js?v=2"></script>'
+OLD_STARTUP_TAG = '    <script src="/startup-status.js?v=1"></script>'
 
 
 def prepare(path: Path) -> bool:
@@ -28,16 +32,24 @@ def prepare(path: Path) -> bool:
     elif START_REPLACEMENT not in source:
         raise RuntimeError("Could not find Glimpse loadMedia initialization marker")
 
-    if OLD_SCRIPT_TAG in source:
-        source = source.replace(OLD_SCRIPT_TAG, SCRIPT_TAG, 1)
-        changed = True
-    elif SCRIPT_TAG not in source:
-        if "</body>" not in source:
-            raise RuntimeError("Could not find </body> in Glimpse index")
-        source = source.replace("</body>", f"{SCRIPT_TAG}\n</body>", 1)
-        changed = True
+    if SCRIPT_TAG not in source:
+        replaced = False
+        for old in OLD_SCRIPT_TAGS:
+            if old in source:
+                source = source.replace(old, SCRIPT_TAG, 1)
+                changed = True
+                replaced = True
+                break
+        if not replaced:
+            if "</body>" not in source:
+                raise RuntimeError("Could not find </body> in Glimpse index")
+            source = source.replace("</body>", f"{SCRIPT_TAG}\n</body>", 1)
+            changed = True
 
-    if STARTUP_STATUS_TAG not in source:
+    if OLD_STARTUP_TAG in source:
+        source = source.replace(OLD_STARTUP_TAG, STARTUP_STATUS_TAG, 1)
+        changed = True
+    elif STARTUP_STATUS_TAG not in source:
         if SCRIPT_TAG not in source:
             raise RuntimeError("Could not find Beyond Glimpse runtime script tag")
         source = source.replace(SCRIPT_TAG, f"{SCRIPT_TAG}\n{STARTUP_STATUS_TAG}", 1)

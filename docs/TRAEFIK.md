@@ -2,11 +2,16 @@
 
 Beyond Glimpse is designed to work cleanly behind Traefik.
 
-The request path is:
+The public request path is:
 
-`client -> Traefik (HTTPS/TLS) -> Beyond Glimpse Nginx (HTTP port 80)`
+```text
+client → Traefik HTTPS/TLS → Beyond Glimpse Nginx :80
+                              ├→ static UI/PWA
+                              ├→ /api/* → catalogue service 127.0.0.1:8091
+                              └→ /poster/* → bounded cache → catalogue whitelist → Jellyfin
+```
 
-Nginx is not a second public reverse proxy in this layout; it is the lightweight static web server inside the Beyond Glimpse container. Traefik handles public routing and TLS.
+Traefik handles public routing and TLS. Nginx remains the only public-facing process inside the container; the catalogue service listens only on container loopback.
 
 ## Quick deployment
 
@@ -21,41 +26,82 @@ Nginx is not a second public reverse proxy in this layout; it is the lightweight
    - `BEYOND_GLIMPSE_HOST`
    - `TRAEFIK_NETWORK`
    - `TRAEFIK_CERTRESOLVER`
+   - `PRIMARY_SERVER=jellyfin`
    - `JELLYFIN_URL`
    - `JELLYFIN_TOKEN`
-   - `PRIMARY_SERVER=jellyfin`
+   - preferably `JELLYFIN_USER_ID` on multi-user servers.
 
 3. Make sure the external Docker network already exists and is shared with Traefik.
 
-4. Start Beyond Glimpse:
+4. Start/recreate Beyond Glimpse:
 
    ```bash
-   docker compose -f docker-compose.traefik.yml up -d --build
+   docker compose -f docker-compose.traefik.yml up -d --build --force-recreate
    ```
 
-The Traefik compose does **not** publish port 9090 or port 80 on the host. Traefik reaches the container on the shared Docker network.
+The Traefik compose publishes no host port. Traefik reaches Nginx directly through the external Docker network.
 
 ## First-start behaviour
 
-Nginx and cron start under Supervisor before the one-shot initial catalogue sync. This means `/healthz` becomes available to Docker/Traefik without waiting for a large first import.
+Supervisor starts Nginx and the localhost catalogue API before the one-shot Jellyfin bootstrap. `/healthz` can therefore become healthy without waiting for the catalogue scan.
 
-On a brand-new install the web UI displays a preparation message while the initial sync runs and retries automatically when the catalogue is ready. On later restarts, an existing good catalogue remains browseable while the startup refresh runs in the background.
+The v2 bootstrap requests only lightweight browse/search metadata and commits each successful page immediately. On a new deployment, the web UI initially reports that indexing is in progress; once rows exist, it can browse those committed items before later pages/libraries finish.
 
-Initial sync log:
+Follow bootstrap progress:
 
 ```bash
-docker exec beyond-glimpse tail -n 100 /var/log/initial-sync.log
+docker exec beyond-glimpse tail -f /var/log/initial-sync.log
 ```
 
-## Ultra-light Jellyfin poster path
+Public non-secret catalogue status:
 
-Jellyfin posters are not bulk-downloaded during sync. The browser requests a tag-versioned URL such as:
+```text
+GET /api/status
+```
+
+Operator status:
+
+```bash
+docker exec beyond-glimpse python /app/scripts/status.py --server jellyfin
+```
+
+## Catalogue API path
+
+Jellyfin v2 browsing does not require public `movies.json`/`tvshows.json` files. Nginx proxies `/api/` to `127.0.0.1:8091` inside the same container.
+
+Typical browser requests are:
+
+```text
+/api/items?type=movie&limit=96&offset=0
+/api/items?type=movie&q=alien&limit=96
+/api/items?type=tvshow&genre=Crime&limit=96
+/api/genres?type=movie
+/api/item/<catalogue-id>
+```
+
+`/api/items` and `/api/genres` are served entirely from private SQLite state. `/api/item/<id>` first requires the ID to exist in that catalogue, then fetches rich Jellyfin detail only if its private cache is missing/stale.
+
+The browser service worker bypasses Cache Storage for `/api/`, so server-side pagination/detail responses do not accumulate an additional browser catalogue cache.
+
+## Jellyfin poster path
+
+Posters are still tag-versioned:
 
 ```text
 /poster/<jellyfin-item-id>/<image-tag>.jpg
 ```
 
-The internal Nginx server fetches that poster from Jellyfin only when it is actually needed and caches the resized result locally.
+The request path is now:
+
+```text
+browser
+  → Nginx bounded poster cache
+  → localhost catalogue service
+  → verify item ID exists + exact stored Primary image tag matches
+  → authenticated Jellyfin image request
+```
+
+The generated Nginx include contains no Jellyfin API token. Credentials remain in the Python catalogue service environment and are used only after whitelist validation.
 
 Defaults:
 
@@ -63,101 +109,98 @@ Defaults:
 - JPEG quality: 72;
 - Nginx poster cache maximum: **256 MiB**;
 - inactive cached posters expire after 30 days;
-- the cache is ephemeral container storage, not part of persistent `/app/data`.
+- poster cache is ephemeral container storage, not persistent `/app/data`.
 
-The image tag is part of the public poster URL and the Nginx cache key, so when Jellyfin changes an image the URL changes automatically rather than requiring a cache purge.
+A changed Jellyfin image tag changes the public URL/cache key naturally.
 
-You can tune the requested poster dimensions in `.env`:
+Tune image output with:
 
 ```text
 POSTER_PROXY_MAX_WIDTH=320
 POSTER_PROXY_QUALITY=72
 ```
 
-The hard cache ceiling is intentionally kept in `config/nginx.conf` so a deployment cannot accidentally grow an unbounded artwork store.
+The hard cache ceiling remains in `config/nginx.conf` so operator configuration cannot accidentally create an unbounded artwork store.
 
-## Catalogue payload model
+## Sync scheduling
 
-For Jellyfin, `movies.json` and `tvshows.json` are compact browse/search indexes. They contain only the fields required to render and filter the grid.
+Jellyfin v2 no longer uses the inherited six-hour rich-sync cron line. The image finalization step disables that Jellyfin cron entry, and Supervisor runs the dedicated lightweight scheduler instead.
 
-Modal-only metadata is stored in deterministic static shards under:
+Default changed-item cadence:
 
 ```text
-/data/jellyfin/details/movies/
-/data/jellyfin/details/tvshows/
+SYNC_INTERVAL_SECONDS=600
 ```
 
-The browser downloads a detail shard only when a title is opened. This avoids sending every synopsis, actor and modal field to every visitor during page startup.
+The scheduler invokes `catalogue_sync.py --incremental`. The sync script performs the ID-only deletion/move reconciliation only when `RECONCILE_INTERVAL_HOURS` is due (24 hours by default).
+
+Cron remains present for retained Plex/Emby compatibility paths.
 
 ## Health checks
 
-Beyond Glimpse exposes:
+Nginx liveness:
 
 ```text
 GET /healthz
 ```
 
-which returns a small non-sensitive JSON response when the internal Nginx server is alive.
+Catalogue state/API health:
 
-The Docker image has a native `HEALTHCHECK`, and the Traefik service definition also checks `/healthz`.
+```text
+GET /api/status
+```
 
-Because Nginx starts before the one-shot initial catalogue sync, the backend can become healthy while a new catalogue is still being prepared. The browser handles that state separately and automatically retries catalogue loading.
+The Docker `HEALTHCHECK` and Traefik backend healthcheck intentionally use `/healthz`: routing remains healthy even while a first bootstrap or later sync is running. Catalogue readiness/progress is separately observable through `/api/status`.
 
 ## Nginx security headers and Traefik
 
-Beyond Glimpse already sends its browser security headers from Nginx, including CSP, framing protection and `nosniff`.
+Beyond Glimpse sends browser security headers from Nginx, including CSP, framing protection and `nosniff`.
 
-It is fine to use ordinary Traefik routing/TLS middleware in front of it. If your Traefik installation applies a **global security-header middleware**, pay particular attention to `Content-Security-Policy`:
+Ordinary Traefik routing/TLS middleware is fine. If Traefik applies a global security-header middleware, pay particular attention to `Content-Security-Policy`:
 
-- duplicate harmless headers are usually fine;
-- multiple CSP headers are all enforced by the browser;
-- a stricter Traefik CSP that forbids the inherited inline Glimpse JavaScript can break the application.
+- multiple CSP headers are all enforced by browsers;
+- a stricter Traefik CSP that forbids the inherited inline Glimpse JavaScript can break the UI.
 
-Either let Beyond Glimpse own its CSP or make sure the Traefik CSP is compatible with the policy in `config/nginx.conf`.
+Either let Beyond Glimpse own CSP or make sure the Traefik policy is compatible with `config/nginx.conf`.
 
-`Strict-Transport-Security` (HSTS) is best added at Traefik rather than Nginx, because Traefik is the component that actually terminates HTTPS. The internal Nginx hop is intentionally plain HTTP on the private Docker network.
+`Strict-Transport-Security` is best applied at Traefik because that is where TLS terminates. The private Traefik→Nginx Docker-network hop remains HTTP.
 
-## Sync and storage status
+## Status and storage
 
-Detailed sync telemetry stays private under the persistent state volume:
+Private v2 catalogue state:
 
 ```text
-/app/state/jellyfin/sync-status.json
+/app/state/jellyfin/catalogue-v2.db
 ```
 
-For a human-readable summary:
+Human-readable status:
 
 ```bash
 docker compose -f docker-compose.traefik.yml exec beyond-glimpse \
   python /app/scripts/status.py --server jellyfin
 ```
 
-For machine-readable JSON:
+JSON status:
 
 ```bash
 docker compose -f docker-compose.traefik.yml exec beyond-glimpse \
   python /app/scripts/status.py --server jellyfin --json
 ```
 
-The status command reports:
+The v2 report includes:
 
-- last sync state and mode;
-- duration and changed-record count;
-- movie and TV-show counts;
-- incremental watermark and last deletion/ID reconciliation;
-- compact index size;
-- detail-shard count and size;
-- local poster/backdrop storage;
-- Nginx poster proxy cache usage against its 256 MiB ceiling;
-- private state storage;
-- total Beyond Glimpse application storage;
-- recent failure output when a sync fails.
-
-Every wrapped sync also emits one single-line `[SYNC SUMMARY]` JSON record to the container/cron log for log collectors.
+- bootstrap/sync state;
+- movie/TV counts and current bootstrap progress;
+- FTS5/LIKE search mode;
+- cached rich-detail row count;
+- SQLite/state size;
+- last bootstrap/incremental/reconciliation timestamps;
+- Nginx poster cache usage against the 256 MiB ceiling;
+- last sync error where present.
 
 ## Production smoke test
 
-Once the first catalogue is ready:
+After bootstrap completes:
 
 ```bash
 docker exec beyond-glimpse python /app/scripts/smoke_test.py
@@ -174,20 +217,19 @@ See `docs/PRODUCTION_CHECKLIST.md` for the complete acceptance sequence.
 
 ## Useful operator commands
 
-Container health:
-
 ```bash
+# container liveness
 docker inspect --format '{{json .State.Health}}' beyond-glimpse
-```
 
-Recent logs:
+# bootstrap
+docker exec beyond-glimpse tail -n 200 /var/log/initial-sync.log
 
-```bash
-docker logs beyond-glimpse --tail 200
-```
+# local API
+docker exec beyond-glimpse tail -n 200 /var/log/catalogue-api.log
 
-Detailed catalogue/storage status:
+# scheduler
+docker exec beyond-glimpse tail -n 200 /var/log/catalogue-scheduler.log
 
-```bash
+# catalogue/storage status
 docker exec beyond-glimpse python /app/scripts/status.py --server jellyfin
 ```

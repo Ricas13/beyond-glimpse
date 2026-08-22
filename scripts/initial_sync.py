@@ -39,20 +39,14 @@ def configured(name):
 
 def command_for(server):
     if server == "jellyfin":
+        # v2 builds only the lightweight browse/search inventory. Expensive item
+        # detail metadata is fetched later, one selected item at a time, by the
+        # local catalogue API.
         return [
             PYTHON,
-            "/app/scripts/sync_runner.py",
-            "--server-type",
-            "jellyfin",
-            "--state-dir",
-            "/app/state/jellyfin",
-            "--output-dir",
-            "/app/data/jellyfin",
-            "--",
-            PYTHON,
-            "/app/scripts/ultralight_jellyfin.py",
-            "--output",
-            "/app/data/jellyfin",
+            "-u",
+            "/app/scripts/catalogue_sync.py",
+            "--bootstrap",
         ]
     if server == "emby":
         return [
@@ -86,7 +80,10 @@ def main():
         atomic_status("failed", message="No configured media server was available for initial sync.")
         return 1
 
-    atomic_status("syncing", message="Preparing catalogue. Existing catalogue data remains available while this runs.")
+    atomic_status(
+        "syncing",
+        message="Preparing catalogue. Jellyfin items become browsable as lightweight pages are indexed.",
+    )
     print(f"Initial background sync starting for: {', '.join(servers)}", flush=True)
 
     for server in servers:

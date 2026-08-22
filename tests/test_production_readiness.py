@@ -24,14 +24,15 @@ class ProductionReadinessTests(unittest.TestCase):
     def test_version_and_dependency_are_pinned(self):
         version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
         self.assertRegex(version, r"^\d+\.\d+\.\d+$")
-        ultralight = (ROOT / "scripts" / "ultralight_jellyfin.py").read_text(encoding="utf-8")
-        self.assertIn(f'base.APP_VERSION = "{version}"', ultralight)
-
+        core = (ROOT / "scripts" / "catalogue_core.py").read_text(encoding="utf-8")
+        self.assertIn(f'APP_VERSION = "{version}"', core)
         requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8").splitlines()
         self.assertEqual(requirements, ["requests==2.34.2"])
         dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
         self.assertIn("pip install --no-cache-dir -r /app/requirements.txt", dockerfile)
         self.assertIn("COPY VERSION /app/VERSION", dockerfile)
+        self.assertIn("catalogue_service.py", dockerfile)
+        self.assertIn("catalogue_sync.py", dockerfile)
 
     def test_initial_sync_commands_keep_tokens_out_of_argv(self):
         with patch.dict(
@@ -52,7 +53,9 @@ class ProductionReadinessTests(unittest.TestCase):
         self.assertNotIn("other-secret", flattened)
         self.assertNotIn("plex-secret", flattened)
         self.assertNotIn("--token", flattened)
-        self.assertIn("ultralight_jellyfin.py", flattened)
+        self.assertIn("catalogue_sync.py", flattened)
+        self.assertIn("--bootstrap", flattened)
+        self.assertNotIn("ultralight_jellyfin.py", json.dumps(initial_sync.command_for("jellyfin")))
 
     def test_initial_sync_status_is_atomic_and_publicly_safe(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -68,18 +71,25 @@ class ProductionReadinessTests(unittest.TestCase):
             finally:
                 initial_sync.WEB_STATUS = old
 
-    def test_supervisor_starts_web_before_one_shot_sync(self):
+    def test_supervisor_starts_web_and_api_before_one_shot_sync(self):
         config = (ROOT / "config" / "supervisord.conf").read_text(encoding="utf-8")
+        self.assertIn("[program:catalogue-api]", config)
+        self.assertIn("catalogue_service.py", config)
         self.assertIn("[program:initial-sync]", config)
-        self.assertIn("command=/usr/local/bin/python /app/scripts/initial_sync.py", config)
+        self.assertIn("/app/scripts/initial_sync.py", config)
+        self.assertIn("[program:catalogue-scheduler]", config)
+        self.assertIn("catalogue_scheduler.py", config)
         self.assertIn("priority=10", config)
+        self.assertIn("priority=15", config)
         self.assertIn("priority=30", config)
+        self.assertIn("priority=40", config)
         self.assertIn("autorestart=false", config)
 
-    def test_browser_startup_helper_preserves_existing_catalogue(self):
+    def test_browser_startup_helper_can_expose_partial_catalogue(self):
         runtime = (ROOT / "web" / "startup-status.js").read_text(encoding="utf-8")
         self.assertIn("hasUsableCatalogue", runtime)
-        self.assertIn("Catalogue is being prepared", runtime)
+        self.assertIn("tryLoadPartialCatalogue", runtime)
+        self.assertIn("/api/status", runtime)
         self.assertIn("await loadMedia()", runtime)
         self.assertIn("cache: 'no-store'", runtime)
         self.assertNotIn("innerHTML", runtime)

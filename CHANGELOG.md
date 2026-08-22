@@ -2,6 +2,48 @@
 
 All notable Beyond Glimpse changes are documented here.
 
+## 2.0.0 — 2026-08-22
+
+Major Jellyfin architecture redesign for very large catalogues.
+
+### Catalogue service
+
+- Jellyfin no longer pre-generates complete public movie/TV JSON files before the site is useful.
+- Added a private SQLite/WAL catalogue database with indexed browse fields and FTS5 title/genre search.
+- Added a localhost-only Python catalogue API behind Nginx for true server-side pagination, search, genre filters and sorting.
+- Browser requests only 48 mobile / 96 desktop items at a time and fetches more as the user scrolls.
+- The initial bootstrap stores only lightweight browse/search fields: ID, library/type, title, year, date added, genres and Primary image tag.
+- Each bootstrap page is committed immediately, so already-indexed items can be browsed while later libraries continue syncing.
+
+### Lazy metadata
+
+- Overview, cast, studio, runtime, ratings, tagline and series counts are no longer fetched for the whole library.
+- Rich metadata is fetched from Jellyfin only when a visitor opens an item and is cached locally with a configurable TTL.
+- Removed Jellyfin detail shards from the active production path.
+
+### Sync efficiency
+
+- Added a 10-minute lightweight changed-item scheduler using `MinDateLastSaved` with overlap protection.
+- Retained a periodic ID-only deletion/move reconciliation safety net.
+- New/moved reconciliation IDs receive only lightweight metadata, never bulk rich metadata.
+- Added guards against zero-ID inventories and unexpectedly destructive reconciliation deletes.
+- Configuration changes to user/library scope trigger a new lightweight bootstrap rather than a rich metadata rebuild.
+- Legacy Jellyfin rich-sync cron generation is disabled in v2; Plex/Emby cron compatibility remains.
+
+### Posters and security
+
+- Poster requests now pass through the local catalogue service before Jellyfin.
+- The requested item ID must exist in the public catalogue and the requested image tag must exactly match the stored tag.
+- Jellyfin API credentials are no longer rendered into generated Nginx poster configuration.
+- Nginx retains the existing hard-bounded 256 MiB ephemeral poster cache.
+
+### Operations
+
+- Added Supervisor-managed `catalogue-api` and `catalogue-scheduler` processes.
+- `status.py` reports v2 SQLite counts, search mode, bootstrap progress and lazy-detail cache size.
+- `smoke_test.py` validates the paginated API, server-side search, lazy detail fetch, whitelisted poster path and private SQLite state.
+- Existing Plex and Emby static catalogue compatibility paths are retained.
+
 ## 1.0.1 — 2026-08-22
 
 Production resilience fix for very large Jellyfin libraries.

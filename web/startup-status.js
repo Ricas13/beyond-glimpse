@@ -1,12 +1,13 @@
-// Beyond Glimpse first-start catalogue status helper.
-// Keeps the last good catalogue visible on restarts and gives brand-new installs
-// a friendly preparation state while the one-shot Supervisor sync is running.
+// Beyond Glimpse startup status helper.
+// v2 can browse already-committed SQLite pages while the lightweight bootstrap
+// continues indexing later libraries.
 
 (() => {
     const STATUS_URL = '/catalogue-status.json';
+    const API_STATUS_URL = '/api/status';
     const POLL_MS = 3000;
     let readyReloaded = false;
-    let sawSyncing = false;
+    let partialLoaded = false;
     let timer = null;
 
     function hasUsableCatalogue() {
@@ -37,6 +38,20 @@
         timer = setTimeout(poll, POLL_MS);
     }
 
+    async function tryLoadPartialCatalogue() {
+        if (!window.__beyondGlimpseCatalogueService || hasUsableCatalogue() || partialLoaded) return;
+        try {
+            const response = await fetch(API_STATUS_URL, { cache: 'no-store' });
+            if (!response.ok) return;
+            const status = await response.json();
+            if ((status.movies || 0) + (status.tvShows || 0) <= 0) return;
+            partialLoaded = true;
+            if (typeof loadMedia === 'function') await loadMedia();
+        } catch (_) {
+            // The localhost API may still be starting; the next poll retries.
+        }
+    }
+
     async function poll() {
         try {
             const response = await fetch(STATUS_URL, { cache: 'no-store' });
@@ -48,8 +63,8 @@
             const state = status && status.state;
 
             if (state === 'starting' || state === 'syncing') {
-                sawSyncing = true;
-                setLoadingMessage('Catalogue is being prepared… This page will update automatically.');
+                await tryLoadPartialCatalogue();
+                setLoadingMessage('Catalogue is being indexed… Available items will appear automatically.');
                 schedule();
                 return;
             }
@@ -59,13 +74,9 @@
                 return;
             }
 
-            // Reload once after an observed background refresh, or if the page
-            // reached a ready state before it ever managed to load a catalogue.
-            if (state === 'ready' && !readyReloaded && (sawSyncing || !hasUsableCatalogue())) {
+            if (state === 'ready' && !readyReloaded && !hasUsableCatalogue()) {
                 readyReloaded = true;
-                if (typeof loadMedia === 'function') {
-                    await loadMedia();
-                }
+                if (typeof loadMedia === 'function') await loadMedia();
             }
         } catch (_) {
             schedule();

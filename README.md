@@ -1,66 +1,99 @@
 # Beyond Glimpse
 
-**Beyond Glimpse** is a fast, storage-efficient media catalogue for Jellyfin, with retained Plex and Emby compatibility. It is a performance-focused fork of [Jereme Hancock's Glimpse](https://github.com/jeremehancock/Glimpse), redesigned to remain responsive on very large libraries without permanently storing an artwork copy for every title.
+**Beyond Glimpse** is a fast, storage-efficient public media catalogue for Jellyfin, with retained Plex and Emby compatibility. It is a performance-focused fork of [Jereme Hancock's Glimpse](https://github.com/jeremehancock/Glimpse), redesigned for very large libraries.
 
-Current release: **v1.0.0**
+Current release: **v2.0.0**
 
-## Why Beyond Glimpse
+## What changed in v2
 
-The original Glimpse design works well for ordinary libraries, but large catalogues can make full metadata refreshes, artwork storage and browser rendering expensive. Beyond Glimpse keeps the familiar catalogue UI while changing the heavy data paths.
-
-For Jellyfin, the default architecture is now:
+The Jellyfin production path is no longer a static mirror generator. Beyond Glimpse now runs a tiny local catalogue service:
 
 ```text
 Jellyfin
    │
-   ├─ changed metadata only ───────────────┐
-   │                                      ▼
-   │                              private SQLite state
-   │                                      │
-   └─ poster only when somebody views it  │
-                                          ▼
-Traefik → Nginx → compact browse indexes + lazy detail shards
-              └→ hard-bounded 256 MiB on-demand poster cache
+   ├─ lightweight bootstrap / changed items / ID inventory
+   │
+   ▼
+private SQLite/WAL catalogue
+   │
+   ├─ FTS5 search
+   ├─ paginated browse API
+   ├─ lazy one-item detail cache
+   └─ exact ID+poster-tag whitelist
+            │
+            ▼
+Traefik → Nginx → browser/PWA
+                 └→ bounded 256 MiB poster cache
 ```
 
-### Main Jellyfin optimisations
+The bootstrap stores only the data required to browse and search:
 
-- Incremental metadata sync using Jellyfin's `MinDateLastSaved` support.
-- Server-time watermarks with a safety overlap window.
-- Periodic **ID-only** deletion/move reconciliation instead of recurring full metadata rebuilds.
-- No per-series season/episode request fan-out.
-- No bulk poster download during sync.
-- Posters fetched only when viewed, resized by Jellyfin and cached by Nginx.
-- Hard **256 MiB** poster proxy cache ceiling.
-- Backdrops disabled by default.
-- Compact browse indexes containing only fields required for catalogue browsing/search.
-- Modal-only metadata stored in 256 deterministic lazy detail shards.
-- 96-card desktop / 48-card mobile incremental rendering.
-- Debounced search and bounded DOM growth.
-- Shell-only PWA cache; catalogue/posters are not duplicated into an unbounded browser cache.
-- Atomic catalogue writes, sync locking, retries/backoff and private SQLite state.
+- Jellyfin item ID;
+- library and movie/series type;
+- title;
+- year;
+- date added;
+- genres;
+- Primary poster image tag.
+
+It does **not** prefetch Overview, cast, studios, runtime, ratings, taglines or series counts for every title. Those fields are fetched from Jellyfin only when somebody opens that item and are then cached locally.
+
+Each bootstrap page is committed immediately, so a brand-new deployment can start showing indexed items while later libraries are still being scanned.
+
+## Why this scales
+
+For Jellyfin, the browser never downloads an all-movies or all-TV JSON file. It requests one page at a time:
+
+```text
+GET /api/items?type=movie&limit=96&offset=0
+GET /api/items?type=movie&limit=96&offset=96
+GET /api/items?type=movie&q=alien&limit=96
+GET /api/items?type=tvshow&genre=Crime&limit=96
+```
+
+Opening a title performs one lazy detail request:
+
+```text
+GET /api/item/<jellyfin-item-id>
+```
+
+The result is cached in SQLite for seven days by default.
+
+### Jellyfin v2 performance characteristics
+
+- 48-item mobile / 96-item desktop browse pages.
+- Server-side pagination rather than all-library browser arrays.
+- SQLite FTS5 search, with a safe `LIKE` fallback if FTS5 is unavailable.
+- Lightweight first bootstrap rather than a rich metadata rebuild.
+- Bootstrap pages are independently committed and immediately browseable.
+- Changed-item polling every 10 minutes by default using `MinDateLastSaved`.
+- Five-minute watermark overlap by default.
+- ID-only deletion/move reconciliation every 24 hours.
+- No bulk poster download.
+- Exact catalogue ID + image-tag validation before a poster can be fetched from Jellyfin.
+- Hard 256 MiB Nginx poster cache ceiling.
+- No Jellyfin token in generated Nginx configuration.
+- `/api/`, `/poster/` and catalogue data are never duplicated into browser Cache Storage.
 
 ## Supported media servers
 
-| Server | Support | Optimisation level |
+| Server | Support | Data path |
 | --- | --- | --- |
-| Jellyfin | Recommended | Full Beyond Glimpse ultra-light path |
-| Emby | Supported | Retained full-sync/local-artwork path |
-| Plex | Supported | Retained inherited path |
+| Jellyfin | Recommended | v2 SQLite catalogue service |
+| Emby | Supported | retained static/full-sync compatibility path |
+| Plex | Supported | retained inherited static path |
 
-The largest performance/storage improvements currently target Jellyfin.
+The v2 architecture currently targets Jellyfin because that is where the very-large-library optimisations are implemented.
 
 ## Recommended deployment: Traefik
 
-The intended production topology is:
-
 ```text
-Internet → Traefik (HTTPS/TLS) → Beyond Glimpse Nginx (HTTP :80)
+Internet → Traefik HTTPS → Beyond Glimpse Nginx :80
+                              ├→ catalogue API 127.0.0.1:8091
+                              └→ static UI/PWA
 ```
 
-Nginx is the lightweight static/application server **inside** the Beyond Glimpse container. Traefik remains the public reverse proxy and TLS terminator.
-
-The supplied Traefik compose publishes **no host port**.
+The supplied Traefik compose publishes no host port.
 
 ### 1. Clone
 
@@ -69,114 +102,99 @@ git clone https://github.com/Ricas13/beyond-glimpse.git
 cd beyond-glimpse
 ```
 
-### 2. Create your environment file
+### 2. Configure
 
 ```bash
 cp .env.traefik.example .env
 nano .env
 ```
 
-At minimum configure:
+Minimum Jellyfin configuration:
 
 ```text
-BEYOND_GLIMPSE_HOST=discover.example.com
+BEYOND_GLIMPSE_HOST=library.example.com
 TRAEFIK_NETWORK=media_net
 TRAEFIK_CERTRESOLVER=letsencrypt
 
 PRIMARY_SERVER=jellyfin
-JELLYFIN_URL=http://jellyfin:8096
+JELLYFIN_URL=https://jellyfin.example.com
 JELLYFIN_TOKEN=replace-me
+JELLYFIN_USER_ID=
 ```
 
-`JELLYFIN_USER_ID` is optional but recommended when you want deterministic user permissions rather than automatic first-user selection.
+`JELLYFIN_USER_ID` is strongly recommended on multi-user servers so catalogue permissions are deterministic. If it is empty, Beyond Glimpse preserves compatibility by selecting the first user returned by Jellyfin and stores that choice in private state.
 
-### 3. Ensure the Traefik network exists
-
-For the default example:
-
-```bash
-docker network inspect media_net >/dev/null 2>&1 || docker network create media_net
-```
-
-Traefik itself must also be attached to that external Docker network.
-
-### 4. Build and start
+### 3. Start
 
 ```bash
 docker compose -f docker-compose.traefik.yml up -d --build
 ```
 
-Nginx starts **before** the first catalogue sync. This means Docker/Traefik health becomes available immediately even when the initial import is large.
+Nginx and the catalogue API start before the background bootstrap. Docker/Traefik health therefore becomes available immediately.
 
-On a brand-new deployment the browser shows:
+On a new deployment, the page initially says the catalogue is being indexed. As soon as the first lightweight page has committed, the browser automatically loads the available items while indexing continues.
 
-```text
-Catalogue is being prepared… This page will update automatically.
-```
+## Jellyfin v2 configuration
 
-The page retries automatically when the first import finishes. On later restarts, the previous good catalogue remains browseable while the startup refresh runs in the background.
-
-## Direct-port deployment
-
-For local testing or deployments without Traefik:
-
-```bash
-docker compose up -d --build
-```
-
-The default compose publishes:
-
-```text
-http://SERVER_IP:9090
-```
-
-For Internet-facing use, the Traefik deployment is preferred.
-
-## Jellyfin configuration
-
-### Core settings
+### Catalogue and sync
 
 | Variable | Default | Purpose |
 | --- | ---: | --- |
-| `PRIMARY_SERVER` | `jellyfin` in Traefik example | Default catalogue/server |
-| `JELLYFIN_URL` | — | Jellyfin base URL |
-| `JELLYFIN_TOKEN` | — | Jellyfin API key |
-| `JELLYFIN_USER_ID` | empty | Optional deterministic Jellyfin user |
-| `JELLYFIN_EXCLUDE_LIBRARIES` | empty | Comma-separated library names or IDs |
-| `PAGE_SIZE` | `500` | Metadata page size |
-| `REQUEST_TIMEOUT` | `60` | API request timeout in seconds |
+| `CATALOGUE_BOOTSTRAP_PAGE_SIZE` | `1000` | Target lightweight page size for first/full scope bootstrap |
+| `CATALOGUE_DELTA_PAGE_SIZE` | `500` | Changed-item page size |
+| `SYNC_INTERVAL_SECONDS` | `600` | Lightweight changed-item scheduler interval |
+| `SYNC_OVERLAP_SECONDS` | `300` | Watermark overlap safety window |
+| `CATALOGUE_ID_PAGE_SIZE` | `2000` | ID-only reconciliation page target |
+| `CATALOGUE_ID_DETAIL_BATCH` | `200` | Lightweight refetch batch for new/moved IDs |
+| `RECONCILE_INTERVAL_HOURS` | `24` | Deletion/move reconciliation interval |
+| `RECONCILE_MAX_DELETE_FRACTION` | `0.35` | Safety guard for unexpectedly destructive inventories |
+| `DETAIL_CACHE_TTL_SECONDS` | `604800` | Lazy rich-detail cache TTL, default seven days |
+| `REQUEST_TIMEOUT` | `60` | Jellyfin API read timeout |
 
-### Ultra-light artwork
+Lightweight bootstrap/delta requests deliberately disable user data and total record counts and request only the small browse/search field set plus the Primary image tag.
+
+If Jellyfin times out on a lightweight page, the bootstrap reduces that request's page size rather than retrying the same oversized page repeatedly.
+
+### Posters
 
 | Variable | Default | Purpose |
 | --- | ---: | --- |
-| `POSTER_PROXY_MAX_WIDTH` | `320` | Width requested from Jellyfin when a poster is first viewed |
+| `POSTER_PROXY_MAX_WIDTH` | `320` | Width requested from Jellyfin |
 | `POSTER_PROXY_QUALITY` | `72` | JPEG quality requested from Jellyfin |
-| `DOWNLOAD_BACKDROPS` | `false` | Whether to persist modal backdrops |
-| `BACKDROP_MAX_WIDTH` | `1280` | Backdrop width if enabled |
-| `IMAGE_QUALITY` | `82` | Persistent backdrop image quality |
 
-Jellyfin posters are **not** bulk-downloaded into `/app/data`. Viewed posters are cached under Nginx's ephemeral cache directory and the cache manager is configured with a hard `max_size=256m`.
+The public URL remains tag-versioned:
 
-The poster URL is image-tag versioned, so a changed Jellyfin poster naturally produces a new cache key.
+```text
+/poster/<item-id>/<image-tag>.jpg
+```
 
-### Incremental sync
+Nginx first sends that request to the localhost catalogue service. The service verifies both that the ID exists in the public catalogue and that the requested tag exactly matches the stored current tag. Only then does it make the authenticated Jellyfin image request. Nginx caches successful viewed posters with a hard `max_size=256m` limit.
 
-| Variable | Default | Purpose |
-| --- | ---: | --- |
-| `INCREMENTAL_SYNC` | `true` | Enable changed-only Jellyfin metadata sync |
-| `FULL_RECONCILE_HOURS` | `24` | Interval for the lightweight ID inventory |
-| `SYNC_OVERLAP_SECONDS` | `300` | Watermark overlap safety margin |
-| `FORCE_FULL_SYNC` | `false` | Force one true full metadata rebuild |
-| `CRON_SCHEDULE` | `0 */6 * * *` | Scheduled refresh cadence |
+## Sync model
 
-Despite the retained compatibility name `FULL_RECONCILE_HOURS`, the normal periodic maintenance operation is now **ID-only**. It requests the current movie/series IDs without extra fields, images, user data or record counts and then:
+### Initial bootstrap
 
-- removes IDs that disappeared;
-- leaves unchanged IDs alone;
-- fetches full metadata only for genuinely new/moved IDs.
+1. Resolve the selected Jellyfin user and eligible movie/TV libraries.
+2. Capture a server-time watermark.
+3. Page each library using lightweight browse/search metadata only.
+4. Commit every page to SQLite immediately.
+5. Mark the bootstrap complete only after every library succeeds.
+6. Remove rows that were not seen in the completed generation.
 
-A true full metadata rebuild still occurs when required for correctness, for example a new/schema-changed state DB, changed server/user/library configuration, `INCREMENTAL_SYNC=false`, or `FORCE_FULL_SYNC=true`.
+Changes made while the bootstrap is running are caught by the next changed-item pass because the watermark was captured at the start and the normal overlap window is applied.
+
+### Normal sync
+
+The Supervisor scheduler runs every 10 minutes by default and requests only items saved since the prior watermark. Updated browse fields and poster tags are upserted into SQLite.
+
+### Reconciliation
+
+Every 24 hours by default, Beyond Glimpse performs an ID-only inventory. Unchanged IDs receive no metadata request. New or moved IDs receive only the lightweight browse fields. Missing IDs are removed locally.
+
+Two safety guards prevent a transient bad inventory from causing a mass local deletion:
+
+- zero returned IDs cannot delete a non-empty catalogue;
+- a deletion fraction greater than `RECONCILE_MAX_DELETE_FRACTION` is refused.
 
 ## Storage model
 
@@ -187,156 +205,156 @@ Persistent mounts:
 ./state → /app/state
 ```
 
-For Jellyfin, `/app/data/jellyfin` normally contains:
+For Jellyfin v2 the important persistent file is:
 
 ```text
-movies.json               compact browse index
-tvshows.json              compact browse index
-details/movies/*.json     lazy modal detail shards
-details/tvshows/*.json    lazy modal detail shards
-backdrops/                normally empty (disabled by default)
-posters/                  legacy files are pruned; bulk posters are not created
+/app/state/jellyfin/catalogue-v2.db
 ```
 
-Private state under `/app/state/jellyfin` includes:
+SQLite contains:
+
+- lightweight browse rows;
+- normalized genre rows;
+- FTS5 search index where available;
+- lazy detail cache;
+- sync metadata/watermarks/progress.
+
+There is no active Jellyfin `movies.json`, `tvshows.json` or detail-shard requirement in v2.
+
+Viewed posters live only in the ephemeral Nginx cache:
 
 ```text
-catalog.db
-sync.lock
-sync-status.json
-image-state.json (legacy/artwork state where applicable)
+/var/cache/nginx/posters
 ```
 
-Nginx explicitly blocks private SQLite/state/temp filenames from the public `/data` tree as defence in depth.
+with a hard 256 MiB ceiling.
 
-## Health and observability
+## Processes
 
-Health endpoint:
+Supervisor runs:
+
+```text
+nginx                 public HTTP/static/proxy
+catalogue-api         localhost SQLite browse/detail/poster service
+cron                  Plex/Emby compatibility
+initial-sync          one-shot startup bootstrap
+catalogue-scheduler   Jellyfin lightweight changed-item scheduler
+```
+
+The legacy Jellyfin rich-sync cron line is disabled in v2.
+
+## Health and status
+
+Public liveness:
 
 ```text
 GET /healthz
 ```
 
-It contains no library or server secrets.
+Catalogue state:
 
-Docker health:
-
-```bash
-docker inspect --format '{{json .State.Health}}' beyond-glimpse
+```text
+GET /api/status
 ```
 
-Human-readable sync/storage status:
+Operator status:
 
 ```bash
 docker exec beyond-glimpse \
   python /app/scripts/status.py --server jellyfin
 ```
 
-JSON status:
+Example fields include movie/TV counts, bootstrap progress, FTS/LIKE mode, lazy-detail row count, database size and poster-cache use.
+
+## Logs
+
+Initial bootstrap:
 
 ```bash
-docker exec beyond-glimpse \
-  python /app/scripts/status.py --server jellyfin --json
+docker exec beyond-glimpse tail -f /var/log/initial-sync.log
 ```
 
-The report includes catalogue counts, sync mode/reason, duration, changed records, ID-reconciliation counts, index/detail/state size and poster proxy cache usage.
+Catalogue API:
+
+```bash
+docker exec beyond-glimpse tail -f /var/log/catalogue-api.log
+```
+
+Scheduled changed-item sync:
+
+```bash
+docker exec beyond-glimpse tail -f /var/log/catalogue-scheduler.log
+```
+
+All v2 Python processes run unbuffered, so progress lines appear as the work happens.
 
 ## Production smoke test
 
-After the first catalogue import:
+After bootstrap completes:
 
 ```bash
 docker exec beyond-glimpse \
   python /app/scripts/smoke_test.py
 ```
 
-To validate the Traefik route too:
+To validate the public Traefik route too:
 
 ```bash
 docker exec beyond-glimpse \
   python /app/scripts/smoke_test.py \
-  --url https://discover.example.com
+  --url https://library.example.com
 ```
 
-The test validates:
+The v2 smoke test validates:
 
-- internal Nginx health;
-- first catalogue completion;
-- compact indexes;
-- a lazy detail shard;
-- a real on-demand poster request through Nginx/Jellyfin;
-- private sync state;
-- optional public Traefik health/homepage.
+- Nginx health;
+- catalogue API availability;
+- completed SQLite bootstrap;
+- bounded page size;
+- server-side search;
+- one lazy detail request;
+- one whitelisted poster request when a sample poster exists;
+- private SQLite catalogue state;
+- optional public Traefik health/home/API routes.
 
-See [`docs/PRODUCTION_CHECKLIST.md`](docs/PRODUCTION_CHECKLIST.md) for the complete real-server acceptance process.
+See [`docs/PRODUCTION_CHECKLIST.md`](docs/PRODUCTION_CHECKLIST.md) for the full deployment acceptance process.
 
-## Logs
-
-Container logs:
-
-```bash
-docker logs beyond-glimpse --tail 200
-```
-
-Initial/background startup sync:
-
-```bash
-docker exec beyond-glimpse tail -n 100 /var/log/initial-sync.log
-```
-
-Scheduled sync output:
-
-```bash
-docker exec beyond-glimpse tail -n 100 /var/log/cron.log
-```
-
-Every wrapped Jellyfin/Emby sync emits a compact `[SYNC SUMMARY]` JSON log line as well as private `sync-status.json` telemetry.
-
-## Updating
+## Updating from v1
 
 ```bash
 cd beyond-glimpse
 git pull
-docker compose -f docker-compose.traefik.yml up -d --build
+docker compose -f docker-compose.traefik.yml up -d --build --force-recreate
 ```
 
-Catalogue files are written atomically and state is stored separately from public data.
+v2 uses a new `catalogue-v2.db`, so it does not need to convert the partially built v1 rich-metadata database. The first v2 startup performs the new lightweight bootstrap from Jellyfin. Existing v1 state files can remain temporarily for rollback; they are not used by the v2 Jellyfin production path.
 
-When upgrading from original Glimpse or an early Beyond Glimpse build, the first Jellyfin run may intentionally perform one full metadata reconciliation to migrate the catalogue schema. It does **not** bulk-download posters. Existing legacy local Jellyfin posters/backdrops are pruned according to the current configuration after a successful sync.
+## Direct-port deployment
 
-## Recovery
+For local testing without Traefik:
 
-To force one true Jellyfin rebuild:
-
-```text
-FORCE_FULL_SYNC=true
+```bash
+docker compose up -d --build
 ```
 
-Redeploy/run the sync, then return it to:
-
-```text
-FORCE_FULL_SYNC=false
-```
-
-Do not permanently run forced full syncs on large libraries.
+The inherited default compose publishes port `9090`. Internet-facing use should use the Traefik compose.
 
 ## Security notes
 
-Beyond Glimpse ships with:
+Beyond Glimpse includes:
 
 - Content Security Policy;
 - anti-framing policy;
 - `nosniff`;
 - referrer and permissions policies;
 - Nginx server tokens disabled;
-- private state blocked from public data routes;
-- API tokens excluded from Jellyfin/Emby Python command arguments;
-- pinned Python runtime dependency;
-- no direct host port in the recommended Traefik compose.
+- private SQLite state outside the public web tree;
+- Jellyfin token excluded from browser responses and generated Nginx configuration;
+- exact catalogue ID+poster-tag validation;
+- no direct host port in the recommended Traefik compose;
+- pinned Python runtime dependency.
 
-Traefik should own HTTPS/HSTS because it terminates TLS. If Traefik also injects a global CSP, make sure it is compatible with Beyond Glimpse's Nginx CSP: browsers enforce multiple CSP headers together.
-
-The container still uses root for Supervisor/cron/master process compatibility; Nginx serves public files through its normal unprivileged worker model. Converting the complete multi-process container to non-root would require a separate process-model redesign and is intentionally not mixed into v1.0.0.
+The container still uses root for the Supervisor/cron/Nginx master process model inherited from Glimpse. A full non-root conversion requires a separate process-model redesign and is intentionally not faked with a cosmetic `USER` directive.
 
 See [`docs/SECURITY.md`](docs/SECURITY.md).
 
@@ -361,5 +379,3 @@ See [`CHANGELOG.md`](CHANGELOG.md).
 ## Upstream and licence
 
 Beyond Glimpse is derived from the MIT-licensed [Glimpse Media Viewer](https://github.com/jeremehancock/Glimpse) by Jereme Hancock. The original copyright and MIT licence are preserved in [`LICENSE`](LICENSE).
-
-Beyond Glimpse changes focus on large-library scalability, storage efficiency, production deployment and security while retaining the original project's interface and multi-server compatibility.

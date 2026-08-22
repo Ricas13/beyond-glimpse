@@ -2,22 +2,25 @@
 
 import argparse
 import json
-import sys
-import urllib.error
+import sqlite3
 import urllib.parse
 import urllib.request
 from pathlib import Path
 
 
-DATA = Path("/app/data/jellyfin")
 STATE = Path("/app/state/jellyfin")
 LOCAL_URL = "http://127.0.0.1"
 
 
-def get(url, *, timeout=10):
-    request = urllib.request.Request(url, headers={"User-Agent": "Beyond-Glimpse-Smoke-Test/1.0"})
+def get(url, *, timeout=20):
+    request = urllib.request.Request(url, headers={"User-Agent": "Beyond-Glimpse-Smoke-Test/2.0"})
     with urllib.request.urlopen(request, timeout=timeout) as response:
         return response.status, response.headers, response.read()
+
+
+def get_json(url, *, timeout=20):
+    status, _, body = get(url, timeout=timeout)
+    return status, json.loads(body.decode("utf-8"))
 
 
 def check(name, fn, failures):
@@ -29,94 +32,103 @@ def check(name, fn, failures):
         print(f"FAIL  {name}: {exc}")
 
 
-def load_index(name):
-    path = DATA / name
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(payload, list):
-        raise RuntimeError(f"{path} is not a JSON array")
-    return payload
-
-
-def shard_key(item_id):
-    value = str(item_id or "").lower()
-    if len(value) >= 2 and all(ch in "0123456789abcdef" for ch in value[:2]):
-        return value[:2]
-    return "zz"
-
-
 def main():
-    parser = argparse.ArgumentParser(description="Validate a live Beyond Glimpse Jellyfin deployment")
-    parser.add_argument("--url", help="Optional public Traefik URL, for example https://discover.example.com")
+    parser = argparse.ArgumentParser(description="Validate a live Beyond Glimpse v2 Jellyfin deployment")
+    parser.add_argument("--url", help="Optional public Traefik URL, for example https://library.example.com")
     args = parser.parse_args()
     failures = []
+    sample = {}
 
-    check(
-        "internal health",
-        lambda: f"HTTP {get(f'{LOCAL_URL}/healthz')[0]}",
-        failures,
-    )
+    check("internal health", lambda: f"HTTP {get(f'{LOCAL_URL}/healthz')[0]}", failures)
+    check("catalogue API health", lambda: f"HTTP {get(f'{LOCAL_URL}/api/status')[0]}", failures)
 
-    status_path = Path("/app/web/catalogue-status.json")
-    def catalogue_status():
-        status = json.loads(status_path.read_text(encoding="utf-8"))
-        state = status.get("state")
-        if state != "ready":
-            raise RuntimeError(f"catalogue state is {state!r}")
-        return state
-    check("catalogue ready", catalogue_status, failures)
+    def status_ok():
+        status, payload = get_json(f"{LOCAL_URL}/api/status")
+        if status != 200:
+            raise RuntimeError(f"HTTP {status}")
+        if not payload.get("bootstrapComplete"):
+            raise RuntimeError(f"bootstrap incomplete (state={payload.get('state')})")
+        total = int(payload.get("movies", 0)) + int(payload.get("tvShows", 0))
+        if total <= 0:
+            raise RuntimeError("catalogue is empty")
+        return f"{payload.get('movies', 0):,} movies, {payload.get('tvShows', 0):,} TV shows, search={payload.get('search')}"
+    check("catalogue ready", status_ok, failures)
 
-    indexes = {}
-    def indexes_ok():
-        indexes["movies"] = load_index("movies.json")
-        indexes["tvshows"] = load_index("tvshows.json")
-        total = len(indexes["movies"]) + len(indexes["tvshows"])
-        if total == 0:
-            raise RuntimeError("both catalogue indexes are empty")
-        return f"{len(indexes['movies']):,} movies, {len(indexes['tvshows']):,} TV shows"
-    check("compact indexes", indexes_ok, failures)
+    def page_ok():
+        status, payload = get_json(f"{LOCAL_URL}/api/items?type=movie&limit=20&offset=0")
+        if status != 200:
+            raise RuntimeError(f"HTTP {status}")
+        items = payload.get("items") or []
+        if not items:
+            status, payload = get_json(f"{LOCAL_URL}/api/items?type=tvshow&limit=20&offset=0")
+            items = payload.get("items") or []
+        if not items:
+            raise RuntimeError("no API item available")
+        if len(items) > 20:
+            raise RuntimeError(f"page returned {len(items)} items for limit 20")
+        sample.update(items[0])
+        return f"{len(items)} items; hasMore={payload.get('hasMore')}"
+    check("paginated browse API", page_ok, failures)
+
+    def search_ok():
+        title = str(sample.get("title") or "").strip()
+        token = next((part for part in title.split() if len(part) >= 3), title[:3])
+        if not token:
+            return "skipped (sample title has no searchable token)"
+        media_type = "movie"
+        status, payload = get_json(
+            f"{LOCAL_URL}/api/items?type={media_type}&limit=10&q={urllib.parse.quote(token)}"
+        )
+        if status != 200:
+            raise RuntimeError(f"HTTP {status}")
+        return f"query={token!r}, {len(payload.get('items') or [])} result(s)"
+    check("server-side search", search_ok, failures)
 
     def detail_ok():
-        candidates = [("movies", item) for item in indexes.get("movies", [])]
-        candidates += [("tvshows", item) for item in indexes.get("tvshows", [])]
-        if not candidates:
-            raise RuntimeError("no item available to test")
-        plural, item = candidates[0]
-        item_id = str(item.get("id", ""))
-        path = DATA / "details" / plural / f"{shard_key(item_id)}.json"
-        shard = json.loads(path.read_text(encoding="utf-8"))
-        if item_id not in shard:
-            raise RuntimeError(f"{item_id} is missing from {path.name}")
-        return path.name
-    check("lazy detail shard", detail_ok, failures)
+        item_id = str(sample.get("id") or "")
+        if not item_id:
+            raise RuntimeError("no sample item ID")
+        status, payload = get_json(
+            f"{LOCAL_URL}/api/item/{urllib.parse.quote(item_id, safe='')}", timeout=70
+        )
+        if status != 200 or payload.get("id") != item_id:
+            raise RuntimeError(f"HTTP {status} or wrong item")
+        return "lazy detail endpoint returned selected item"
+    check("lazy single-item detail", detail_ok, failures)
 
     def poster_ok():
-        candidates = indexes.get("movies", []) + indexes.get("tvshows", [])
-        item = next((value for value in candidates if value.get("posterTag")), None)
-        if item is None:
-            return "skipped (no poster-tagged item in catalogue)"
+        if not sample.get("posterTag"):
+            return "skipped (sample has no Primary image tag)"
         url = (
-            f"{LOCAL_URL}/poster/{urllib.parse.quote(str(item['id']), safe='')}/"
-            f"{urllib.parse.quote(str(item['posterTag']), safe='')}.jpg"
+            f"{LOCAL_URL}/poster/{urllib.parse.quote(str(sample['id']), safe='')}/"
+            f"{urllib.parse.quote(str(sample['posterTag']), safe='')}.jpg"
         )
-        status, headers, body = get(url, timeout=30)
+        status, headers, body = get(url, timeout=70)
         content_type = headers.get("Content-Type", "")
         if status != 200 or not content_type.startswith("image/") or not body:
             raise RuntimeError(f"HTTP {status}, type={content_type!r}, bytes={len(body)}")
         return f"HTTP {status}, {content_type}, {len(body):,} bytes"
-    check("on-demand poster proxy", poster_ok, failures)
+    check("whitelisted poster proxy", poster_ok, failures)
 
     def private_state_ok():
-        db = STATE / "catalog.db"
-        status = STATE / "sync-status.json"
-        if not db.exists() or not status.exists():
-            raise RuntimeError("catalog.db or sync-status.json is missing")
-        return f"catalog.db {db.stat().st_size:,} bytes"
-    check("private sync state", private_state_ok, failures)
+        db = STATE / "catalogue-v2.db"
+        if not db.exists():
+            raise RuntimeError("catalogue-v2.db is missing")
+        connection = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        try:
+            count = connection.execute("SELECT COUNT(*) FROM items").fetchone()[0]
+        finally:
+            connection.close()
+        if count <= 0:
+            raise RuntimeError("catalogue-v2.db has no items")
+        return f"{db.stat().st_size:,} bytes, {count:,} items"
+    check("private SQLite catalogue", private_state_ok, failures)
 
     if args.url:
         public = args.url.rstrip("/")
         check("Traefik health", lambda: f"HTTP {get(f'{public}/healthz')[0]}", failures)
         check("Traefik homepage", lambda: f"HTTP {get(f'{public}/')[0]}", failures)
+        check("Traefik catalogue API", lambda: f"HTTP {get(f'{public}/api/status')[0]}", failures)
 
     print()
     if failures:

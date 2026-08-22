@@ -18,9 +18,14 @@ COPY VERSION /app/VERSION
 COPY scripts/plex_data_fetcher.py /app/scripts/
 COPY scripts/jellyfin_data_fetcher.py /app/scripts/
 COPY scripts/ultralight_jellyfin.py /app/scripts/
+COPY scripts/catalogue_core.py /app/scripts/
+COPY scripts/catalogue_sync.py /app/scripts/
+COPY scripts/catalogue_service.py /app/scripts/
+COPY scripts/catalogue_scheduler.py /app/scripts/
 COPY scripts/configure_poster_proxy.py /app/scripts/
 COPY scripts/prepare_web.py /app/scripts/
 COPY scripts/prepare_entrypoint.py /app/scripts/
+COPY scripts/finalize_entrypoint_v2.py /app/scripts/
 COPY scripts/sync_runner.py /app/scripts/
 COPY scripts/status.py /app/scripts/
 COPY scripts/initial_sync.py /app/scripts/
@@ -34,9 +39,9 @@ RUN rm -f /etc/nginx/sites-enabled/default
 COPY config/nginx.conf /etc/nginx/conf.d/default.conf
 COPY config/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
-# Build-time fallback keeps nginx -t valid without secrets. We also generate a
-# realistic dummy poster-proxy include and validate it, then restore the safe
-# no-secret fallback for the shipped image. The entrypoint writes the real include.
+# Build-time fallback keeps nginx -t valid without secrets. The production
+# include points at the localhost catalogue service and contains no Jellyfin
+# credentials; runtime still disables it when Jellyfin is unconfigured.
 RUN printf '%s\n' 'location /poster/ { return 404; }' > /etc/nginx/poster-proxy.inc \
     && nginx -t \
     && JELLYFIN_URL='http://jellyfin:8096' JELLYFIN_TOKEN='abcdef123456' \
@@ -46,7 +51,8 @@ RUN printf '%s\n' 'location /poster/ { return 404; }' > /etc/nginx/poster-proxy.
     && printf '%s\n' 'location /poster/ { return 404; }' > /etc/nginx/poster-proxy.inc
 
 COPY config/entrypoint.sh /app/
-RUN python /app/scripts/prepare_entrypoint.py /app/entrypoint.sh
+RUN python /app/scripts/prepare_entrypoint.py /app/entrypoint.sh \
+    && python /app/scripts/finalize_entrypoint_v2.py /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 RUN nginx -t
 
