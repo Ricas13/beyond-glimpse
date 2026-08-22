@@ -2,6 +2,16 @@
 
 All notable Beyond Glimpse changes are documented here.
 
+## 2.0.1 — 2026-08-22
+
+Browser compatibility fix for the new v2 Jellyfin catalogue service.
+
+- Fixed root-page Jellyfin detection when upstream Glimpse uses generic `data/movies.json` paths in its inherited `loadMedia()` function.
+- The production HTML now adds a credential-free primary-server source hint before the v2 runtime takes over.
+- Plex and Emby detection remain compatible because the hint is derived from the server-themed document title generated at container startup.
+- Bumped the catalogue runtime URL and service-worker shell cache so mobile browsers cannot retain the broken v2.0.0 frontend script.
+- Added regression coverage for hint injection, ordering and idempotence.
+
 ## 2.0.0 — 2026-08-22
 
 Major Jellyfin architecture redesign for very large catalogues.
