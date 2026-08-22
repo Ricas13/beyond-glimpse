@@ -48,17 +48,21 @@ class IdOnlyReconciliationTests(unittest.TestCase):
         finally:
             ultra.ORIGINAL_CHOOSE_SYNC_MODE = original
 
-    def test_id_inventory_disables_heavy_fields_images_and_user_data(self):
+    def test_id_inventory_is_lightweight_and_tolerates_server_page_caps(self):
         calls = []
 
         def request_json(path, params=None):
             calls.append((path, dict(params or {})))
-            return {"Items": [{"Id": "a"}, {"Id": "b"}]}
+            if len(calls) == 1:
+                # Deliberately shorter than requested to simulate a server-side
+                # response cap. The implementation must ask for the next page.
+                return {"Items": [{"Id": "a"}, {"Id": "b"}]}
+            return {"Items": []}
 
         fake = SimpleNamespace(page_size=500, request_json=request_json)
         ids = ultra.fetch_library_ids(fake, "user-1", "library-1", "movie")
         self.assertEqual(ids, ["a", "b"])
-        self.assertEqual(len(calls), 1)
+        self.assertEqual(len(calls), 2)
         path, params = calls[0]
         self.assertEqual(path, "/Items")
         self.assertEqual(params["EnableImages"], "false")
@@ -66,6 +70,7 @@ class IdOnlyReconciliationTests(unittest.TestCase):
         self.assertEqual(params["EnableTotalRecordCount"], "false")
         self.assertNotIn("Fields", params)
         self.assertGreaterEqual(params["Limit"], 2000)
+        self.assertEqual(calls[1][1]["StartIndex"], 2)
 
     def test_reconciliation_deletes_missing_and_fetches_only_new_or_moved(self):
         connection = sqlite3.connect(":memory:")
@@ -164,9 +169,7 @@ class IdOnlyReconciliationTests(unittest.TestCase):
             )
             """
         )
-        connection.execute(
-            "INSERT INTO items VALUES ('a','lib','movie','{}',NULL,NULL)"
-        )
+        connection.execute("INSERT INTO items VALUES ('a','lib','movie','{}',NULL,NULL)")
         connection.commit()
 
         old_fetch_ids = ultra.fetch_library_ids
