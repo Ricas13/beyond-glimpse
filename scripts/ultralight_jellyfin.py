@@ -17,6 +17,18 @@ DETAILS_FIELDS = (
     "originallyAvailableAt",
     "tagline",
 )
+FULL_ITEM_FIELDS = (
+    "Overview,Genres,People,Studios,DateCreated,RunTimeTicks,ProviderIds,"
+    "ImageTags,BackdropImageTags,RecursiveItemCount,Taglines"
+)
+ID_RECONCILE_PAGE_SIZE = 2000
+ID_DETAIL_BATCH_SIZE = 200
+
+# Preserve the proven base incremental implementation and state machine. The
+# ultra-light layer only changes the periodic deletion reconciliation path.
+ORIGINAL_CHOOSE_SYNC_MODE = base.JellyfinDataFetcher.choose_sync_mode
+ORIGINAL_RUN_INCREMENTAL_SYNC = base.JellyfinDataFetcher.run_incremental_sync
+ORIGINAL_FINALIZE_STATE = base.JellyfinDataFetcher.finalize_state
 
 
 def shard_key(item_id):
@@ -137,14 +149,195 @@ def ultralight_write_public_catalogue(self, connection):
     return counts["movie"], counts["tvshow"]
 
 
+def ultralight_choose_sync_mode(self, connection, user_id, allowed_libraries, sync_started_at):
+    mode, reason = ORIGINAL_CHOOSE_SYNC_MODE(
+        self,
+        connection,
+        user_id,
+        allowed_libraries,
+        sync_started_at,
+    )
+    self._id_reconcile_due = False
+
+    # The base engine historically used a full metadata rebuild to detect
+    # deletions every N hours. Keep all genuine full-sync reasons intact, but
+    # convert only that periodic maintenance pass into a cheap ID inventory.
+    if mode == "full" and reason.startswith("periodic ") and "deletion reconciliation is due" in reason:
+        self._id_reconcile_due = True
+        return (
+            "incremental",
+            reason.replace("deletion reconciliation", "ID-only deletion reconciliation"),
+        )
+    return mode, reason
+
+
+def fetch_library_ids(self, user_id, library_id, media_type):
+    all_ids = []
+    start_index = 0
+    include_type = "Movie" if media_type == "movie" else "Series"
+    page_size = max(self.page_size, ID_RECONCILE_PAGE_SIZE)
+
+    while True:
+        params = {
+            "ParentId": library_id,
+            "StartIndex": start_index,
+            "Limit": page_size,
+            "Recursive": "true",
+            "IncludeItemTypes": include_type,
+            "EnableTotalRecordCount": "false",
+            "EnableImages": "false",
+            "EnableUserData": "false",
+            "UserId": user_id,
+        }
+        data = self.request_json("/Items", params=params)
+        items = data.get("Items", [])
+        if not items:
+            break
+        all_ids.extend(str(item["Id"]) for item in items if item.get("Id"))
+        start_index += len(items)
+        if len(items) < page_size:
+            break
+
+    return all_ids
+
+
+def fetch_items_by_ids(self, user_id, item_ids):
+    item_ids = list(dict.fromkeys(str(value) for value in item_ids if value))
+    if not item_ids:
+        return []
+
+    results = []
+    for offset in range(0, len(item_ids), ID_DETAIL_BATCH_SIZE):
+        batch = item_ids[offset : offset + ID_DETAIL_BATCH_SIZE]
+        params = {
+            "Ids": ",".join(batch),
+            "UserId": user_id,
+            "Fields": FULL_ITEM_FIELDS,
+            "EnableTotalRecordCount": "false",
+            "EnableUserData": "false",
+            "EnableImages": "true",
+            "Limit": len(batch),
+        }
+        data = self.request_json("/Items", params=params)
+        results.extend(data.get("Items", []))
+    return results
+
+
+def run_id_reconciliation(self, connection, user_id, allowed_libraries):
+    seen = {}
+    total_seen = 0
+    for library in allowed_libraries:
+        ids = fetch_library_ids(
+            self,
+            user_id,
+            library["id"],
+            library["media_type"],
+        )
+        total_seen += len(ids)
+        for item_id in ids:
+            seen[item_id] = (str(library["id"]), library["media_type"])
+
+    existing = {
+        str(item_id): (str(library_id), media_type)
+        for item_id, library_id, media_type in connection.execute(
+            "SELECT id, library_id, media_type FROM items"
+        )
+    }
+
+    deleted_ids = sorted(set(existing) - set(seen))
+    new_ids = set(seen) - set(existing)
+    moved_ids = {
+        item_id
+        for item_id in set(seen).intersection(existing)
+        if seen[item_id] != existing[item_id]
+    }
+    refresh_ids = sorted(new_ids | moved_ids)
+
+    # Fetch full metadata only for inventory entries absent from the local
+    # catalogue or whose library/type changed. Usually this list is empty.
+    refreshed_entries = []
+    if refresh_ids:
+        returned = fetch_items_by_ids(self, user_id, refresh_ids)
+        returned_ids = set()
+        for item in returned:
+            item_id = str(item.get("Id", ""))
+            target = seen.get(item_id)
+            if not item_id or target is None:
+                continue
+            returned_ids.add(item_id)
+            library_id, media_type = target
+            entry = self.build_catalog_entry(item, media_type, library_id)
+            if entry:
+                refreshed_entries.append(entry)
+
+        missing = set(refresh_ids) - returned_ids
+        if missing:
+            print(f"Warning: ID reconciliation could not refetch {len(missing)} inventory items")
+
+    changed_count = 0
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        if deleted_ids:
+            connection.executemany("DELETE FROM items WHERE id = ?", ((item_id,) for item_id in deleted_ids))
+            changed_count += len(deleted_ids)
+
+        for entry in refreshed_entries:
+            if self.upsert_catalog_entry(connection, entry):
+                changed_count += 1
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+
+    print(
+        "ID reconciliation: "
+        f"{total_seen} current IDs, {len(deleted_ids)} deleted, "
+        f"{len(new_ids)} new, {len(moved_ids)} moved"
+    )
+    return changed_count
+
+
+def ultralight_run_incremental_sync(self, connection, user_id, allowed_libraries, watermark):
+    changed_count = ORIGINAL_RUN_INCREMENTAL_SYNC(
+        self,
+        connection,
+        user_id,
+        allowed_libraries,
+        watermark,
+    )
+    if getattr(self, "_id_reconcile_due", False):
+        changed_count += run_id_reconciliation(self, connection, user_id, allowed_libraries)
+    return changed_count
+
+
+def ultralight_finalize_state(self, connection, user_id, allowed_libraries, sync_started_at, mode):
+    ORIGINAL_FINALIZE_STATE(
+        self,
+        connection,
+        user_id,
+        allowed_libraries,
+        sync_started_at,
+        mode,
+    )
+    if getattr(self, "_id_reconcile_due", False):
+        timestamp = self.format_api_datetime(sync_started_at)
+        self.set_meta(connection, "last_full_reconcile", timestamp)
+        self.set_meta(connection, "last_id_reconcile", timestamp)
+        connection.commit()
+
+
 def activate_ultralight_mode():
-    # Force one clean reconciliation on upgrade because the public export format
-    # changes from full records to compact indexes + detail shards.
+    # Schema v2 is the compact-index/detail-shard format introduced by PR #7.
+    # The ID-only reconciliation changes maintenance behavior, not public schema,
+    # so upgrades do not force another full metadata rebuild.
     base.CATALOG_SCHEMA_VERSION = "2-ultralight"
-    base.APP_VERSION = "1.2"
+    base.APP_VERSION = "1.3"
     base.JellyfinDataFetcher.build_catalog_entry = ultralight_build_catalog_entry
     base.JellyfinDataFetcher.populate_expected_image_keys = ultralight_populate_expected_image_keys
     base.JellyfinDataFetcher.write_public_catalogue = ultralight_write_public_catalogue
+    base.JellyfinDataFetcher.choose_sync_mode = ultralight_choose_sync_mode
+    base.JellyfinDataFetcher.run_incremental_sync = ultralight_run_incremental_sync
+    base.JellyfinDataFetcher.finalize_state = ultralight_finalize_state
 
 
 if __name__ == "__main__":
