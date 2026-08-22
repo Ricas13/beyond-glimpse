@@ -53,6 +53,7 @@ class PrepareWebTests(unittest.TestCase):
             self.assertIn("__startBeyondGlimpseMedia", first)
             self.assertIn('/large-library.js?v=6', first)
             self.assertIn('/library-browse.js?v=1', first)
+            self.assertIn('/tv-episodes.js?v=1', first)
             self.assertIn('/startup-status.js?v=3', first)
             self.assertNotIn("__beyondGlimpseServerHintShim", first)
             self.assertIn("const title = String(document.title || '').toLowerCase();", runtime)
@@ -65,6 +66,7 @@ class PrepareWebTests(unittest.TestCase):
             self.assertEqual(first, second)
             self.assertEqual(second.count('/large-library.js?v=6'), 1)
             self.assertEqual(second.count('/library-browse.js?v=1'), 1)
+            self.assertEqual(second.count('/tv-episodes.js?v=1'), 1)
             self.assertEqual(second.count('/startup-status.js?v=3'), 1)
 
     def test_runtime_tags_are_after_literal_body_comment_and_before_real_close(self):
@@ -76,15 +78,18 @@ class PrepareWebTests(unittest.TestCase):
             comment_end = content.index('tag -->') + len('tag -->')
             runtime_pos = content.index('/large-library.js?v=6')
             library_pos = content.index('/library-browse.js?v=1')
+            episodes_pos = content.index('/tv-episodes.js?v=1')
             startup_pos = content.index('/startup-status.js?v=3')
             real_body_close = content.rfind('</body>')
 
             self.assertLess(comment_end, runtime_pos)
             self.assertLess(runtime_pos, library_pos)
-            self.assertLess(library_pos, startup_pos)
+            self.assertLess(library_pos, episodes_pos)
+            self.assertLess(episodes_pos, startup_pos)
             self.assertLess(startup_pos, real_body_close)
             self.assertEqual(content.count('/large-library.js?v=6'), 1)
             self.assertEqual(content.count('/library-browse.js?v=1'), 1)
+            self.assertEqual(content.count('/tv-episodes.js?v=1'), 1)
             self.assertEqual(content.count('/startup-status.js?v=3'), 1)
 
     def test_repairs_tags_previously_injected_inside_body_comment(self):
@@ -102,6 +107,7 @@ class PrepareWebTests(unittest.TestCase):
             real_body_close = content.rfind('</body>')
             self.assertEqual(content.count('/large-library.js?v=6'), 1)
             self.assertEqual(content.count('/library-browse.js?v=1'), 1)
+            self.assertEqual(content.count('/tv-episodes.js?v=1'), 1)
             self.assertEqual(content.count('/startup-status.js?v=3'), 1)
             self.assertLess(content.index('/large-library.js?v=6'), real_body_close)
             self.assertNotIn('/large-library.js?v=5', content)
@@ -115,6 +121,7 @@ class PrepareWebTests(unittest.TestCase):
                 content = path.read_text(encoding="utf-8")
                 self.assertIn('/large-library.js?v=6', content)
                 self.assertIn('/library-browse.js?v=1', content)
+                self.assertIn('/tv-episodes.js?v=1', content)
                 self.assertIn('/startup-status.js?v=3', content)
                 self.assertNotIn("__beyondGlimpseServerHintShim", content)
                 self.assertNotIn(old_tag, content)

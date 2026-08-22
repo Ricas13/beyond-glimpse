@@ -2,6 +2,28 @@
 
 All notable Beyond Glimpse changes are documented here.
 
+## 2.2.0 — 2026-08-22
+
+Lazy TV season and episode browsing.
+
+- TV series modals now show season tabs and a compact episode table.
+- Season 1 is selected automatically when present; clicking another season swaps the episode table in place.
+- Season lists and one selected season's episodes are fetched only when a series modal is opened.
+- Episode rows include episode number, title, air date, runtime and a short overview.
+- Season/episode responses are cached persistently in the existing SQLite state database with a six-hour default TTL.
+- Stale cached child metadata can still be served when Jellyfin is temporarily unavailable.
+- Episode requests are constrained to public catalogue series and verified season membership, preventing arbitrary Jellyfin season enumeration.
+- No season or episode metadata is added to the 72k-title bootstrap path.
+
+## 2.1.0 — 2026-08-22
+
+Per-library Jellyfin browsing.
+
+- Movies and TV Shows keep their all-content tabs and gain adjacent library dropdowns.
+- Added `/api/libraries` with local SQLite counts and a cached Jellyfin Virtual Folders lookup.
+- Browse, search, sort, genre filtering and infinite scroll can be scoped to one selected library server-side.
+- Library selection does not bulk-download a library into the browser or trigger Jellyfin item scans.
+
 ## 2.0.3 — 2026-08-22
 
 Frontend runtime placement fix for the inherited Glimpse page.
