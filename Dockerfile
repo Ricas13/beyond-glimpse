@@ -29,9 +29,18 @@ RUN python /app/scripts/prepare_web.py /app/web/index.html
 RUN rm -f /etc/nginx/sites-enabled/default
 COPY config/nginx.conf /etc/nginx/conf.d/default.conf
 COPY config/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
-# Build-time fallback keeps nginx -t valid without secrets. The entrypoint
-# replaces this include from the runtime Jellyfin environment before Nginx starts.
-RUN printf '%s\n' 'location /poster/ { return 404; }' > /etc/nginx/poster-proxy.inc
+
+# Build-time fallback keeps nginx -t valid without secrets. We also generate a
+# realistic dummy poster-proxy include and validate it, then restore the safe
+# no-secret fallback for the shipped image. The entrypoint writes the real include.
+RUN printf '%s\n' 'location /poster/ { return 404; }' > /etc/nginx/poster-proxy.inc \
+    && nginx -t \
+    && JELLYFIN_URL='http://jellyfin:8096' JELLYFIN_TOKEN='abcdef123456' \
+       POSTER_PROXY_MAX_WIDTH='320' POSTER_PROXY_QUALITY='72' \
+       python /app/scripts/configure_poster_proxy.py \
+    && nginx -t \
+    && printf '%s\n' 'location /poster/ { return 404; }' > /etc/nginx/poster-proxy.inc
+
 COPY config/entrypoint.sh /app/
 RUN python /app/scripts/prepare_entrypoint.py /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
