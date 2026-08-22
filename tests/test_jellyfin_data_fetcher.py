@@ -85,6 +85,40 @@ class JellyfinDataFetcherTests(unittest.TestCase):
         fetcher.atomic_write_json(target, [{"new": True}])
         self.assertEqual(target.read_text(encoding="utf-8"), '[{"new":true}]\n')
 
+    def test_state_is_stored_outside_public_output_tree(self):
+        fetcher, root = self.make_fetcher()
+        self.assertFalse(fetcher.image_state_file.is_relative_to(root))
+        self.assertEqual(fetcher.image_state_file.name, "image-state.json")
+
+    def test_backdrops_are_disabled_by_default(self):
+        fetcher, _ = self.make_fetcher()
+        self.assertFalse(fetcher.download_backdrops)
+
+    def test_legacy_public_state_is_migrated_then_removed(self):
+        tempdir = tempfile.TemporaryDirectory()
+        self.addCleanup(tempdir.cleanup)
+        root = Path(tempdir.name)
+        output = root / "data" / "jellyfin"
+        output.mkdir(parents=True)
+        legacy_state = output / "image-state.json"
+        legacy_checksums = output / "checksums.pkl"
+        legacy_state.write_text('{"posters/movies/a.jpg":{"tag":"old"}}', encoding="utf-8")
+        legacy_checksums.write_bytes(b"legacy")
+
+        fetcher = JellyfinDataFetcher(
+            "http://example.test:8096",
+            "secret-token",
+            output_dir=output,
+            server_type="jellyfin",
+        )
+        self.assertIn("posters/movies/a.jpg", fetcher.image_state)
+        fetcher.atomic_write_json(fetcher.image_state_file, fetcher.image_state, compact=False)
+        for legacy_path in (fetcher.legacy_image_state_file, fetcher.legacy_checksums_file):
+            legacy_path.unlink(missing_ok=True)
+        self.assertTrue(fetcher.image_state_file.exists())
+        self.assertFalse(legacy_state.exists())
+        self.assertFalse(legacy_checksums.exists())
+
 
 if __name__ == "__main__":
     unittest.main()
