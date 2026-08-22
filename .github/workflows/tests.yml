@@ -25,3 +25,5 @@ jobs:
         run: node --check web/large-library.js
       - name: Run unit tests
         run: python -m unittest discover -s tests -v
+      - name: Build container image
+        run: docker build --tag beyond-glimpse:test .
