@@ -29,6 +29,16 @@ nginx -t
 
 echo "Running initial data fetch"'''
 
+SYNC_END_MARKER = '# Make sure the data directory is accessible by nginx'
+BACKGROUND_SYNC_REPLACEMENT = '''echo "Initial catalogue sync will run in the background under Supervisor"
+printf '%s\\n' '{"state":"starting","message":"Catalogue startup is beginning."}' > /app/web/catalogue-status.json
+chown www-data:www-data /app/web/catalogue-status.json 2>/dev/null || true
+
+'''
+
+APP_TITLE_OLD = 'APP_TITLE=${APP_TITLE:-"Glimpse"}'
+APP_TITLE_NEW = 'APP_TITLE=${APP_TITLE:-"Beyond Glimpse"}'
+
 
 def replace_one(source, candidates, new):
     if new in source:
@@ -46,6 +56,18 @@ def replace_optional_many(source, candidates, new):
         if old in source:
             return source.replace(old, new, 1), True
     return source, False
+
+
+def replace_initial_sync_block(source):
+    if BACKGROUND_SYNC_REPLACEMENT in source:
+        return source, False
+    start = source.find(PROXY_MARKER)
+    if start < 0:
+        raise RuntimeError("Could not find initial data fetch marker in entrypoint.sh")
+    end = source.find(SYNC_END_MARKER, start)
+    if end < 0:
+        raise RuntimeError("Could not find end of initial data fetch block in entrypoint.sh")
+    return source[:start] + BACKGROUND_SYNC_REPLACEMENT + source[end:], True
 
 
 def prepare(path: Path) -> bool:
@@ -74,12 +96,31 @@ def prepare(path: Path) -> bool:
         source = source.replace(PROXY_MARKER, PROXY_SETUP, 1)
         proxy_changed = True
 
+    source, background_changed = replace_initial_sync_block(source)
+
+    branding_changed = False
+    replacements = (
+        (APP_TITLE_OLD, APP_TITLE_NEW),
+        ('"name": "Glimpse Media Viewer"', '"name": "$app_title"'),
+        ('"short_name": "Glimpse"', '"short_name": "$app_title"'),
+        (
+            '"description": "A sleek, responsive web application for browsing your Plex/Jellyfin/Emby media server"',
+            '"description": "A fast, storage-efficient media catalogue powered by Beyond Glimpse"',
+        ),
+    )
+    for old, new in replacements:
+        if old in source:
+            source = source.replace(old, new)
+            branding_changed = True
+
     changed = (
         jellyfin_changed
         or emby_changed
         or initial_jellyfin_changed
         or initial_emby_changed
         or proxy_changed
+        or background_changed
+        or branding_changed
     )
     if changed:
         path.write_text(source, encoding="utf-8")
@@ -87,7 +128,7 @@ def prepare(path: Path) -> bool:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Prepare Beyond Glimpse entrypoint for ultra-light Jellyfin sync")
+    parser = argparse.ArgumentParser(description="Prepare Beyond Glimpse entrypoint for production")
     parser.add_argument("path", nargs="?", default="/app/entrypoint.sh")
     args = parser.parse_args()
     path = Path(args.path)
