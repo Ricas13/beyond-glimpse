@@ -1,0 +1,71 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - VERSION
+      - .github/workflows/release.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(tr -d '[:space:]' < VERSION)"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid VERSION: $version" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+
+      - name: Check existing release
+        id: existing
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "$TAG already exists; nothing to publish."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish GitHub release
+        if: steps.existing.outputs.exists != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          notes="docs/releases/v${VERSION}.md"
+          if [[ -f "$notes" ]]; then
+            gh release create "$TAG" \
+              --target "$GITHUB_SHA" \
+              --title "Beyond Glimpse $TAG" \
+              --notes-file "$notes"
+          else
+            gh release create "$TAG" \
+              --target "$GITHUB_SHA" \
+              --title "Beyond Glimpse $TAG" \
+              --generate-notes
+          fi
