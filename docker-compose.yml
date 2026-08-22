@@ -9,7 +9,7 @@ services:
     ports:
       - "9090:80"
     volumes:
-      # Public catalogue data: compact JSON plus optimized poster artwork.
+      # Public catalogue data: compact indexes, detail shards and optional backdrops.
       - ./data:/app/data
       # Private sync state is deliberately kept outside the Nginx-served data tree.
       - ./state:/app/state
@@ -29,15 +29,19 @@ services:
       - JELLYFIN_EXCLUDE_LIBRARIES= # Comma-separated list of library names or IDs to exclude
       - JELLYFIN_USER_ID= # Optional: makes catalogue permissions/user selection deterministic
 
+      # Jellyfin posters are fetched only when viewed and held in Nginx's hard-bounded
+      # 256 MiB ephemeral cache. These control the resized image Jellyfin returns.
+      - POSTER_PROXY_MAX_WIDTH=320
+      - POSTER_PROXY_QUALITY=72
+
       # Emby Configuration
       - EMBY_URL=http://your-emby-server:8096
       - EMBY_TOKEN=your-emby-api-token
       - EMBY_EXCLUDE_LIBRARIES= # Comma-separated list of library names or IDs to exclude
       - EMBY_USER_ID=
 
-      # Large-library artwork settings
+      # Large-library sync/artwork settings
       - PAGE_SIZE=500
-      - POSTER_MAX_WIDTH=500
       - BACKDROP_MAX_WIDTH=1280
       - IMAGE_QUALITY=82
       # Backdrops consume far more disk than posters and are not required to browse.
@@ -45,8 +49,9 @@ services:
       - DOWNLOAD_BACKDROPS=false
 
       # Jellyfin incremental sync settings
-      # Normal scheduled runs ask Jellyfin only for metadata saved since the last
-      # successful watermark. A periodic full pass reconciles deleted/moved titles.
+      # Normal runs ask only for metadata saved since the last successful watermark.
+      # Every FULL_RECONCILE_HOURS, a lightweight ID-only inventory catches deletions
+      # and moves without rebuilding full metadata for the whole catalogue.
       - INCREMENTAL_SYNC=true
       - FULL_RECONCILE_HOURS=24
       # Intentional overlap protects against timestamp precision/clock-edge misses.
