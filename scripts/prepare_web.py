@@ -32,10 +32,11 @@ OLD_STARTUP_TAGS = (
 # Strip any prior Beyond Glimpse external runtime tags before placing the
 # canonical pair immediately before the *real* closing body tag. Glimpse's
 # source contains an HTML comment that literally mentions "</body>" before the
-# actual closing tag, so first-occurrence string replacement is unsafe.
+# actual closing tag, so first-occurrence string replacement is unsafe. Older
+# broken pages can have these tags embedded in the middle of that comment, so
+# this deliberately does not anchor the match to a line boundary.
 RUNTIME_TAG_RE = re.compile(
-    r'^[ \t]*<script src="/(?:large-library\.js\?v=\d+|startup-status\.js\?v=\d+)"></script>[ \t]*\r?\n?',
-    re.MULTILINE,
+    r'[ \t]*<script src="/(?:large-library\.js\?v=\d+|startup-status\.js\?v=\d+)"></script>[ \t]*(?:\r?\n)?'
 )
 
 # v2.0.1 briefly used an inline function-toString shim. Remove it during
