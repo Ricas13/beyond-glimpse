@@ -36,6 +36,7 @@ COPY config/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 COPY config/entrypoint.sh /app/
 RUN python /app/scripts/prepare_entrypoint.py /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
+RUN nginx -t
 
 # Create empty crontab file
 RUN touch /etc/cron.d/media-cron
