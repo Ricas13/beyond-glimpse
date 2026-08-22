@@ -76,7 +76,7 @@ class ProductionReadinessTests(unittest.TestCase):
     def test_supervisor_starts_web_and_api_before_one_shot_sync(self):
         config = (ROOT / "config" / "supervisord.conf").read_text(encoding="utf-8")
         self.assertIn("[program:catalogue-api]", config)
-        self.assertIn("catalogue_service.py", config)
+        self.assertIn("/app/scripts/catalogue_present_only.py", config)
         self.assertIn("[program:initial-sync]", config)
         self.assertIn("/app/scripts/initial_sync.py", config)
         self.assertIn("[program:catalogue-scheduler]", config)
