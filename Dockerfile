@@ -16,11 +16,16 @@ RUN mkdir -p /app/web /app/data /app/scripts
 # Copy Python scripts
 COPY scripts/plex_data_fetcher.py /app/scripts/
 COPY scripts/jellyfin_data_fetcher.py /app/scripts/
+COPY scripts/prepare_web.py /app/scripts/
 RUN chmod +x /app/scripts/plex_data_fetcher.py
 RUN chmod +x /app/scripts/jellyfin_data_fetcher.py
+RUN chmod +x /app/scripts/prepare_web.py
 
-# Copy web files
+# Copy web files and inject the bounded large-library renderer before shipping.
+# Keeping this as a build step lets us retain the upstream UI while replacing
+# only its expensive all-at-once rendering path.
 COPY web/ /app/web/
+RUN python /app/scripts/prepare_web.py /app/web/index.html
 
 # Remove default Nginx configuration and add our custom one
 RUN rm -f /etc/nginx/sites-enabled/default
