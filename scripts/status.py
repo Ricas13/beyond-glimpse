@@ -39,6 +39,13 @@ def read_json(path: Path):
         return {}
 
 
+def file_size(path: Path):
+    try:
+        return path.stat().st_size
+    except OSError:
+        return 0
+
+
 def collect(server, data_root=Path("/app/data"), state_root=Path("/app/state")):
     data_dir = data_root / server
     state_dir = state_root / server
@@ -47,6 +54,8 @@ def collect(server, data_root=Path("/app/data"), state_root=Path("/app/state")):
     poster_files, poster_bytes = tree_stats(data_dir / "posters")
     backdrop_files, backdrop_bytes = tree_stats(data_dir / "backdrops")
     state_files, state_bytes = tree_stats(state_dir)
+    movies_json_bytes = file_size(data_dir / "movies.json")
+    tvshows_json_bytes = file_size(data_dir / "tvshows.json")
 
     result = dict(status)
     result.update(
@@ -58,13 +67,11 @@ def collect(server, data_root=Path("/app/data"), state_root=Path("/app/state")):
             "backdropBytes": backdrop_bytes,
             "stateFiles": state_files,
             "stateBytes": state_bytes,
-            "publicBytes": poster_bytes
-            + backdrop_bytes
-            + (data_dir / "movies.json").stat().st_size if (data_dir / "movies.json").exists() else poster_bytes + backdrop_bytes,
+            "moviesJsonBytes": movies_json_bytes,
+            "tvShowsJsonBytes": tvshows_json_bytes,
+            "publicBytes": poster_bytes + backdrop_bytes + movies_json_bytes + tvshows_json_bytes,
         }
     )
-    if (data_dir / "tvshows.json").exists():
-        result["publicBytes"] += (data_dir / "tvshows.json").stat().st_size
     return result
 
 
@@ -86,6 +93,7 @@ def print_text(data):
         "Storage: "
         f"posters {human_bytes(data.get('posterBytes'))} ({data.get('posterFiles', 0):,} files) | "
         f"backdrops {human_bytes(data.get('backdropBytes'))} ({data.get('backdropFiles', 0):,} files) | "
+        f"catalogue JSON {human_bytes((data.get('moviesJsonBytes') or 0) + (data.get('tvShowsJsonBytes') or 0))} | "
         f"state {human_bytes(data.get('stateBytes'))}"
     )
     if data.get("state") == "failed":
