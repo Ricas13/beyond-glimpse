@@ -16,6 +16,9 @@
     let apiLoading = false;
     let activePageController = null;
     let genreGeneration = 0;
+    let modalOpenGeneration = 0;
+    let apiRetryTimer = null;
+    let apiRetryCount = 0;
     let apiHasMore = false;
     let apiNextOffset = 0;
     let apiSearch = '';
@@ -354,6 +357,7 @@
             if (generation !== queryGeneration) return;
             const items = Array.isArray(payload.items) ? payload.items : [];
             appendApiItems(type, items);
+            apiRetryCount = 0;
             apiHasMore = Boolean(payload.hasMore);
             apiNextOffset = payload.nextOffset == null ? apiNextOffset + items.length : payload.nextOffset;
             const { grid, noResults } = contentParts(type);
@@ -368,8 +372,14 @@
         } catch (error) {
             if (error.name === 'AbortError') return;
             console.error('Catalogue API page failed:', error);
-            if (generation === queryGeneration && !currentDataArray(type).length) {
-                setLoading(type, 'Catalogue service is starting…');
+            if (generation === queryGeneration) {
+                if (!currentDataArray(type).length) {
+                    setLoading(type, 'Catalogue service is starting…');
+                }
+                // Transient API errors must not leave infinite scrolling stranded.
+                const delay = Math.min(15000, 1000 * 2 ** Math.min(apiRetryCount++, 4));
+                clearTimeout(apiRetryTimer);
+                apiRetryTimer = setTimeout(() => loadApiPage(generation), delay);
             }
         } finally {
             if (activePageController === controller) {
@@ -382,6 +392,8 @@
     async function resetApiQuery(searchTerm) {
         queryGeneration += 1;
         const generation = queryGeneration;
+        clearTimeout(apiRetryTimer);
+        apiRetryCount = 0;
         disconnectObserver();
         if (activePageController) activePageController.abort();
         activePageController = null;
@@ -472,9 +484,11 @@
     }
 
     async function v2OpenModal(indexItem, type) {
+        const generation = ++modalOpenGeneration;
         let item = indexItem;
         try { item = await loadDetails(indexItem); }
         catch (error) { console.warn('Could not load lazy item details:', error); }
+        if (generation !== modalOpenGeneration) return;
 
         const posterContainer = document.querySelector('.modal-poster');
         posterContainer.replaceChildren();
@@ -604,6 +618,11 @@
     displayMedia = staticDisplayMedia;
     filterAndSortMedia = v2FilterAndSortMedia;
     openModal = v2OpenModal;
+    const originalCloseModal = closeModal;
+    closeModal = function (...args) {
+        ++modalOpenGeneration;
+        return originalCloseModal(...args);
+    };
     loadMedia = v2LoadMedia;
 
     window.__beyondGlimpseLargeLibraryReady = true;

@@ -196,6 +196,10 @@
     }
 
     function selectLibrary(type, id, name) {
+        if (selected[type] === id) {
+            closeMenus();
+            return;
+        }
         selected[type] = id;
         updateControl(type, name);
         closeMenus();
@@ -215,7 +219,7 @@
 
     async function loadLibraryList(type) {
         try {
-            const response = await originalFetch(`/api/libraries?type=${encodeURIComponent(type)}`, );
+            const response = await originalFetch(`/api/libraries?type=${encodeURIComponent(type)}`);
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
             const payload = await response.json();
             libraryLists[type] = Array.isArray(payload.libraries) ? payload.libraries : [];
