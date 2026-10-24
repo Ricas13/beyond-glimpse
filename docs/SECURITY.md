@@ -89,3 +89,10 @@ The image retains the combined Nginx + cron + Supervisor process model inherited
 A correct full non-root conversion requires changing cron execution, privileged-port binding and file ownership together. A cosmetic `USER` directive is intentionally not used because it would break the process model without materially changing the host/root trust boundary.
 
 For Internet exposure, use the supplied Traefik deployment or another maintained TLS reverse proxy and avoid publishing the Beyond Glimpse container port directly.
+
+## Legacy Jellyfin data
+
+On the v2 Jellyfin path, the old `/data/jellyfin/` static directory is denied
+by Nginx. Its v1 files may remain on the Docker volume for rollback, but they
+are not required for the v2 paginated catalogue and should not remain publicly
+browsable. Plex and Emby static compatibility remains unchanged.
