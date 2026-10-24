@@ -266,6 +266,22 @@ class CatalogueV2Tests(unittest.TestCase):
         self.assertNotIn("JELLYFIN_TOKEN", source)
         self.assertNotIn("JELLYFIN_URL", source)
 
+    def test_full_bootstrap_keeps_existing_data_on_partial_inventory(self):
+        connection, _ = self.make_db()
+        for item_id, lib in (
+            ("movie-1", "lib-1"), ("movie-2", "lib-1"), ("missing", "other-lib")
+        ):
+            record = core.light_item_from_api(
+                {"Id": item_id, "Name": item_id, "Genres": []}, lib, "movie", 1
+            )
+            core.upsert_light_item(connection, record)
+        connection.commit()
+        with self.assertRaisesRegex(RuntimeError, "refusing suspicious deletion"):
+            sync.bootstrap(FakeBootstrapClient(), connection)
+        self.assertIsNotNone(
+            connection.execute("SELECT id FROM items WHERE id='missing'").fetchone()
+        )
+
     def test_read_only_db_does_not_create_database(self):
         with tempfile.TemporaryDirectory() as tmp:
             missing = Path(tmp) / "missing.db"

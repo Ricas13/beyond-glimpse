@@ -264,8 +264,11 @@
             selected[type] = '';
             updateControl(type);
             closeMenus();
-            // The upstream click handler already invokes switchTab, which reloads
-            // the selected page. Only genre counts need explicit refreshing.
+            // The upstream click handler runs before this callback and may have
+            // fetched the old library. Reload once with the now-cleared selection.
+            if (typeof filterAndSortMedia === 'function') {
+                filterAndSortMedia(document.querySelector('.search-input')?.value || '');
+            }
             if (typeof window.__beyondGlimpseRefreshGenres === 'function') {
                 window.__beyondGlimpseRefreshGenres();
             }

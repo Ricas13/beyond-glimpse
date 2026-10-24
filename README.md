@@ -2,7 +2,7 @@
 
 **Beyond Glimpse** is a fast, storage-efficient public media catalogue for Jellyfin, with retained Plex and Emby compatibility. It is a performance-focused fork of [Jereme Hancock's Glimpse](https://github.com/jeremehancock/Glimpse), redesigned for very large libraries.
 
-Current release: **v2.0.0**
+Current release: **v2.2.1**
 
 ## What changed in v2
 

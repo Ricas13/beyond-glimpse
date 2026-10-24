@@ -120,7 +120,7 @@ class TraefikDeploymentTests(unittest.TestCase):
         self.assertNotIn("ports:", compose)
         self.assertIn('expose:\n      - "80"', compose)
         self.assertIn("traefik.http.services.beyond-glimpse.loadbalancer.server.port=80", compose)
-        self.assertIn("loadbalancer.healthcheck.path=/healthz", compose)
+        self.assertIn("loadbalancer.healthcheck.path=/api/status", compose)
         self.assertIn("traefik.docker.network=${TRAEFIK_NETWORK:-media_net}", compose)
 
     def test_nginx_and_docker_expose_healthcheck(self):
@@ -129,7 +129,7 @@ class TraefikDeploymentTests(unittest.TestCase):
         self.assertIn("location = /healthz", nginx)
         self.assertIn("service\\\":\\\"beyond-glimpse", nginx.replace('"', '\\"'))
         self.assertIn("HEALTHCHECK", dockerfile)
-        self.assertIn("http://127.0.0.1/healthz", dockerfile)
+        self.assertIn("http://127.0.0.1/api/status", dockerfile)
 
     def test_env_file_is_ignored_but_example_is_trackable(self):
         ignore = (ROOT / ".gitignore").read_text(encoding="utf-8")

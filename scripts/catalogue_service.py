@@ -451,7 +451,6 @@ class CatalogueHandler(BaseHTTPRequestHandler):
         ).fetchone()
 
     def fetch_seasons_payload(self, connection, series_id):
-        ensure_tv_cache_schema(connection)
         cached = connection.execute(
             "SELECT payload_json,fetched_at FROM series_season_cache WHERE series_id=?",
             (series_id,),
@@ -540,7 +539,6 @@ class CatalogueHandler(BaseHTTPRequestHandler):
             if season_id not in allowed_seasons:
                 return self.send_json(404, {"error": "season not found for series"})
 
-            ensure_tv_cache_schema(connection)
             cached = connection.execute(
                 """
                 SELECT payload_json,fetched_at FROM season_episode_cache
