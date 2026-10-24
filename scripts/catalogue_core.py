@@ -44,12 +44,13 @@ def db_path():
     return Path(os.environ.get("CATALOGUE_DB", DEFAULT_DB_PATH))
 
 
-def open_db(path=None, *, readonly=False):
+def open_db(path=None, *, readonly=False, initialize=True):
+    """Read-only requests never initialise or write catalogue schema."""
     path = Path(path or db_path())
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if readonly and path.exists():
+    if readonly:
         connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=30)
     else:
+        path.parent.mkdir(parents=True, exist_ok=True)
         connection = sqlite3.connect(path, timeout=30)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA busy_timeout=30000")
@@ -57,7 +58,8 @@ def open_db(path=None, *, readonly=False):
     if not readonly:
         connection.execute("PRAGMA journal_mode=WAL")
         connection.execute("PRAGMA synchronous=NORMAL")
-        ensure_schema(connection)
+        if initialize:
+            ensure_schema(connection)
     return connection
 
 
@@ -162,7 +164,17 @@ def light_item_from_api(item, library_id, media_type, generation):
     }
 
 
-def upsert_light_item(connection, record):
+def upsert_light_item(connection, record, *, fts_enabled=None, skip_unchanged=False):
+    if skip_unchanged:
+        existing = connection.execute(
+            """SELECT library_id,media_type,title,sort_title,year,date_added,genres_json,poster_tag
+               FROM items WHERE id=?""", (record["id"],)
+        ).fetchone()
+        if existing is not None and all(existing[key] == record[key] for key in (
+            "library_id", "media_type", "title", "sort_title", "year",
+            "date_added", "genres_json", "poster_tag"
+        )):
+            return False
     connection.execute(
         """
         INSERT INTO items(
@@ -194,12 +206,13 @@ def upsert_light_item(connection, record):
             "INSERT OR IGNORE INTO item_genres(item_id,genre) VALUES(?,?)",
             ((record["id"], genre) for genre in record["genres"]),
         )
-    if get_meta(connection, "fts_enabled", "0") == "1":
+    if (get_meta(connection, "fts_enabled", "0") == "1") if fts_enabled is None else fts_enabled:
         connection.execute("DELETE FROM items_fts WHERE id = ?", (record["id"],))
         connection.execute(
             "INSERT INTO items_fts(id,title,genres) VALUES(?,?,?)",
             (record["id"], record["title"], " ".join(record["genres"])),
         )
+    return True
 
 
 def delete_items(connection, item_ids):

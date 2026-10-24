@@ -46,7 +46,7 @@ def command_for(server):
             PYTHON,
             "-u",
             "/app/scripts/catalogue_sync.py",
-            "--bootstrap",
+            "--incremental",
         ]
     if server == "emby":
         return [

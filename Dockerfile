@@ -21,6 +21,7 @@ COPY scripts/ultralight_jellyfin.py /app/scripts/
 COPY scripts/catalogue_core.py /app/scripts/
 COPY scripts/catalogue_sync.py /app/scripts/
 COPY scripts/catalogue_service.py /app/scripts/
+COPY scripts/catalogue_present_only.py /app/scripts/
 COPY scripts/catalogue_scheduler.py /app/scripts/
 COPY scripts/configure_poster_proxy.py /app/scripts/
 COPY scripts/prepare_web.py /app/scripts/

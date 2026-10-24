@@ -166,7 +166,7 @@ class CatalogueHandler(BaseHTTPRequestHandler):
             return self.send_json(500, {"error": "catalogue request failed"})
 
     def handle_status(self):
-        connection = open_db()
+        connection = open_db(readonly=True)
         try:
             movies = connection.execute("SELECT COUNT(*) FROM items WHERE media_type='movie'").fetchone()[0]
             tvshows = connection.execute("SELECT COUNT(*) FROM items WHERE media_type='tvshow'").fetchone()[0]
@@ -214,12 +214,13 @@ class CatalogueHandler(BaseHTTPRequestHandler):
 
     def handle_libraries(self, query):
         media_type = self.media_type(query)
-        libraries = [
-            library for library in self.cached_libraries()
-            if library.get("media_type") == media_type
-        ]
-        connection = open_db()
+        connection = open_db(readonly=True)
         try:
+            try:
+                libraries = json.loads(get_meta(connection, "libraries_json", "[]") or "[]")
+            except (ValueError, TypeError):
+                libraries = []
+            libraries = [lib for lib in libraries if lib.get("media_type") == media_type]
             counts = {
                 str(row["library_id"]): int(row["count"])
                 for row in connection.execute(
@@ -285,7 +286,7 @@ class CatalogueHandler(BaseHTTPRequestHandler):
             where.append("i.library_id = ?")
             params.append(library_id)
 
-        connection = open_db()
+        connection = open_db(readonly=True)
         try:
             fts_query = safe_fts_query(search) if search else None
             if search and fts_query and get_meta(connection, "fts_enabled", "0") == "1":
@@ -324,7 +325,7 @@ class CatalogueHandler(BaseHTTPRequestHandler):
     def handle_genres(self, query):
         media_type = self.media_type(query)
         library_id = self.library_id(query)
-        connection = open_db()
+        connection = open_db(readonly=True)
         try:
             where = ["i.media_type=?"]
             params = [media_type]
@@ -356,7 +357,7 @@ class CatalogueHandler(BaseHTTPRequestHandler):
     def handle_item(self, item_id):
         if not item_id or len(item_id) > 128:
             return self.send_json(404, {"error": "item not found"})
-        connection = open_db()
+        connection = open_db(initialize=False)
         try:
             row = connection.execute("SELECT * FROM items WHERE id=?", (item_id,)).fetchone()
             if row is None:
@@ -466,7 +467,7 @@ class CatalogueHandler(BaseHTTPRequestHandler):
             raise
 
     def handle_seasons(self, series_id):
-        connection = open_db()
+        connection = open_db(initialize=False)
         try:
             if self.series_row(connection, series_id) is None:
                 return self.send_json(404, {"error": "series not found"})
@@ -487,7 +488,7 @@ class CatalogueHandler(BaseHTTPRequestHandler):
         if not season_id or len(season_id) > 128:
             return self.send_json(400, {"error": "seasonId is required"})
 
-        connection = open_db()
+        connection = open_db(initialize=False)
         try:
             if self.series_row(connection, series_id) is None:
                 return self.send_json(404, {"error": "series not found"})
@@ -587,7 +588,7 @@ class CatalogueHandler(BaseHTTPRequestHandler):
         if not item_id or not tag or len(item_id) > 128 or len(tag) > 256:
             return self.send_json(404, {"error": "poster not found"})
 
-        connection = open_db()
+        connection = open_db(readonly=True)
         try:
             row = connection.execute("SELECT poster_tag FROM items WHERE id=?", (item_id,)).fetchone()
             if row is None or not row["poster_tag"] or row["poster_tag"] != tag:
@@ -605,6 +606,11 @@ class CatalogueHandler(BaseHTTPRequestHandler):
 
 
 def main():
+    connection = open_db()
+    try:
+        ensure_tv_cache_schema(connection)
+    finally:
+        connection.close()
     if os.environ.get("JELLYFIN_URL") and os.environ.get("JELLYFIN_TOKEN"):
         CatalogueHandler.jellyfin = JellyfinClient()
         state = "with Jellyfin upstream"
