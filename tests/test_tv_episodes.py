@@ -72,6 +72,7 @@ class TvEpisodeTests(unittest.TestCase):
             1,
         )
         core.upsert_light_item(connection, record)
+        service.ensure_tv_cache_schema(connection)
         connection.commit()
         connection.close()
         return path

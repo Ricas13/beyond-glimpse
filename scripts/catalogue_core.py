@@ -415,6 +415,7 @@ class JellyfinClient:
     def fetch_poster(self, item_id, tag, max_width, quality):
         response = self.session.get(
             f"{self.url}/Items/{item_id}/Images/Primary",
+            stream=True,
             params={
                 "tag": tag,
                 "maxWidth": int(max_width),
@@ -424,5 +425,16 @@ class JellyfinClient:
             headers={"Accept": "image/jpeg,image/*"},
             timeout=(10, self.timeout),
         )
-        response.raise_for_status()
-        return response.content, response.headers.get("Content-Type", "image/jpeg")
+        try:
+            response.raise_for_status()
+            # A corrupt or unexpectedly huge poster must not exhaust API memory.
+            max_bytes = 3 * 1024 * 1024
+            pieces, size = [], 0
+            for chunk in response.iter_content(chunk_size=64 * 1024):
+                size += len(chunk)
+                if size > max_bytes:
+                    raise requests.RequestException("Jellyfin poster exceeds 3 MiB cap")
+                pieces.append(chunk)
+            return b"".join(pieces), response.headers.get("Content-Type", "image/jpeg")
+        finally:
+            response.close()

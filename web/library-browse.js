@@ -201,13 +201,16 @@
         closeMenus();
 
         const targetTab = tabType(type);
-        if (typeof switchTab === 'function') switchTab(targetTab);
-
-        // Re-run v2 loading so both the item page and genre counts are scoped to
-        // the selected library. This is local SQLite work; Jellyfin is untouched.
-        setTimeout(() => {
-            if (typeof loadMedia === 'function') loadMedia();
-        }, 0);
+        const activeTab = document.querySelector('.tab.active')?.dataset.content;
+        if (activeTab !== targetTab && typeof switchTab === 'function') {
+            switchTab(targetTab);
+        } else if (typeof filterAndSortMedia === 'function') {
+            filterAndSortMedia(document.querySelector('.search-input')?.value || '');
+        }
+        // A library selection refreshes only its own lightweight SQL result set.
+        if (typeof window.__beyondGlimpseRefreshGenres === 'function') {
+            window.__beyondGlimpseRefreshGenres();
+        }
     }
 
     async function loadLibraryList(type) {
@@ -261,9 +264,11 @@
             selected[type] = '';
             updateControl(type);
             closeMenus();
-            setTimeout(() => {
-                if (typeof loadMedia === 'function') loadMedia();
-            }, 0);
+            // The upstream click handler already invokes switchTab, which reloads
+            // the selected page. Only genre counts need explicit refreshing.
+            if (typeof window.__beyondGlimpseRefreshGenres === 'function') {
+                window.__beyondGlimpseRefreshGenres();
+            }
         });
     }
 

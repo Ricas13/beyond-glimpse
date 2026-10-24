@@ -14,6 +14,8 @@
     let filterTimer = null;
     let queryGeneration = 0;
     let apiLoading = false;
+    let activePageController = null;
+    let genreGeneration = 0;
     let apiHasMore = false;
     let apiNextOffset = 0;
     let apiSearch = '';
@@ -332,6 +334,8 @@
     async function loadApiPage(generation) {
         if (apiLoading || !apiHasMore || generation !== queryGeneration) return;
         apiLoading = true;
+        const controller = new AbortController();
+        activePageController = controller;
         const type = apiActiveType;
         const sort = sortQuery();
         const params = new URLSearchParams({
@@ -344,7 +348,7 @@
         if (apiSearch) params.set('q', apiSearch);
         if (currentGenre && currentGenre !== 'all') params.set('genre', currentGenre);
         try {
-            const response = await fetch(`/api/items?${params}`, { cache: 'no-store' });
+            const response = await fetch(`/api/items?${params}`, { cache: 'no-store', signal: controller.signal });
             if (!response.ok) throw new Error(`catalogue API returned ${response.status}`);
             const payload = await response.json();
             if (generation !== queryGeneration) return;
@@ -362,12 +366,16 @@
             }
             ensureApiSentinel(type, generation);
         } catch (error) {
+            if (error.name === 'AbortError') return;
             console.error('Catalogue API page failed:', error);
             if (generation === queryGeneration && !currentDataArray(type).length) {
                 setLoading(type, 'Catalogue service is starting…');
             }
         } finally {
-            apiLoading = false;
+            if (activePageController === controller) {
+                apiLoading = false;
+                activePageController = null;
+            }
         }
     }
 
@@ -375,6 +383,8 @@
         queryGeneration += 1;
         const generation = queryGeneration;
         disconnectObserver();
+        if (activePageController) activePageController.abort();
+        activePageController = null;
         apiLoading = false;
         apiHasMore = true;
         apiNextOffset = 0;
@@ -388,15 +398,16 @@
     }
 
     async function loadApiGenres() {
-        const entries = await Promise.all(['movies', 'tvshows'].map(async type => {
-            const response = await fetch(`/api/genres?type=${apiMediaType(type)}`, { cache: 'no-store' });
-            if (!response.ok) return [type, {}];
-            const payload = await response.json();
-            const values = {};
-            for (const genre of payload.genres || []) values[genre.name] = genre.count;
-            return [type, values];
-        }));
-        for (const [type, genres] of entries) allGenres[type] = genres;
+        const type = activeTabType();
+        const generation = ++genreGeneration;
+        const response = await fetch(`/api/genres?type=${apiMediaType(type)}`, { cache: 'no-store' });
+        if (!response.ok) throw new Error(`genre request failed: ${response.status}`);
+        const payload = await response.json();
+        // An earlier response must not repaint counts for a newer library selection.
+        if (generation !== genreGeneration || type !== activeTabType()) return;
+        const genres = {};
+        for (const genre of payload.genres || []) genres[genre.name] = genre.count;
+        allGenres[type] = genres;
     }
 
     function staticDisplayMedia(data, type) {
@@ -575,16 +586,16 @@
         }
     }
 
+    // The upstream switchTab already calls filterAndSortMedia; don't reload twice.
     document.querySelectorAll('.tab').forEach(tab => {
         tab.addEventListener('click', () => {
             if (!isApiMode()) return;
-            setTimeout(() => {
-                currentGenre = 'all';
-                updateGenreUI(activeTabType());
-                resetApiQuery(document.querySelector('.search-input')?.value || '');
-            }, 0);
+            window.__beyondGlimpseRefreshGenres();
         });
     });
+    window.__beyondGlimpseRefreshGenres = () => loadApiGenres()
+        .then(() => updateGenreUI(activeTabType()))
+        .catch(error => console.warn('Could not refresh catalogue genres:', error));
 
     createTextPlaceholder = (container, title) => safeTextPlaceholder(container, title);
     setGenreFilter = safeSetGenreFilter;

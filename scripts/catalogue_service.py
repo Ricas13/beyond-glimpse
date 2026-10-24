@@ -3,6 +3,7 @@
 import json
 import os
 import time
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlparse
 
@@ -27,6 +28,7 @@ EPISODE_CACHE_TTL_SECONDS = max(300, int(os.environ.get("EPISODE_CACHE_TTL_SECON
 POSTER_WIDTH = max(64, min(1000, int(os.environ.get("POSTER_PROXY_MAX_WIDTH", "320"))))
 POSTER_QUALITY = max(30, min(95, int(os.environ.get("POSTER_PROXY_QUALITY", "72"))))
 LIBRARY_CACHE_TTL_SECONDS = max(60, int(os.environ.get("LIBRARY_CACHE_TTL_SECONDS", "3600")))
+MAX_API_THREADS = max(4, min(64, int(os.environ.get("MAX_API_THREADS", "24"))))
 
 
 def int_or_none(value):
@@ -105,6 +107,41 @@ def ensure_tv_cache_schema(connection):
         """
     )
     connection.commit()
+
+
+class BoundedCatalogueServer(ThreadingHTTPServer):
+    """Bound in-flight handlers so upstream stalls cannot spawn unlimited threads."""
+    daemon_threads = True
+    request_queue_size = 64
+
+    def __init__(self, *args, **kwargs):
+        self.request_slots = threading.BoundedSemaphore(MAX_API_THREADS)
+        super().__init__(*args, **kwargs)
+
+    def process_request(self, request, client_address):
+        if not self.request_slots.acquire(blocking=False):
+            try:
+                request.sendall(
+                    b"HTTP/1.1 503 Service Unavailable\r\n"
+                    b"Connection: close\r\n"
+                    b"Retry-After: 1\r\n"
+                    b"Content-Length: 0\r\n\r\n"
+                )
+            except OSError:
+                pass
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except Exception:
+            self.request_slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self.request_slots.release()
 
 
 class CatalogueHandler(BaseHTTPRequestHandler):
@@ -268,8 +305,8 @@ class CatalogueHandler(BaseHTTPRequestHandler):
         except (TypeError, ValueError):
             return self.send_json(400, {"error": "invalid pagination"})
 
-        search = ((query.get("q") or [""])[0] or "").strip()
-        genre = ((query.get("genre") or [""])[0] or "").strip()
+        search = ((query.get("q") or [""])[0] or "").strip()[:160]
+        genre = ((query.get("genre") or [""])[0] or "").strip()[:160]
         sort = ((query.get("sort") or ["title"])[0] or "title").strip().lower()
         order = ((query.get("order") or [""])[0] or "").strip().lower()
 
@@ -617,8 +654,7 @@ def main():
     else:
         CatalogueHandler.jellyfin = None
         state = "without Jellyfin upstream"
-    server = ThreadingHTTPServer((HOST, PORT), CatalogueHandler)
-    server.daemon_threads = True
+    server = BoundedCatalogueServer((HOST, PORT), CatalogueHandler)
     print(f"Catalogue API listening on http://{HOST}:{PORT} ({state})", flush=True)
     try:
         server.serve_forever(poll_interval=0.5)
