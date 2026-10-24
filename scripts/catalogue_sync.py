@@ -60,6 +60,53 @@ def config_signature(user_id, libraries):
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
 
 
+def persist_libraries(connection, libraries):
+    """Serve public library names from local state, not live Jellyfin."""
+    set_meta(connection, "libraries_json", json.dumps([
+        {"id": str(lib["id"]), "name": str(lib["name"]), "media_type": lib["media_type"]}
+        for lib in libraries
+    ], ensure_ascii=False, separators=(",", ":")))
+
+
+def deletion_guard(connection, removed_ids, *, stage):
+    removed = set(removed_ids)
+    if not removed:
+        return
+    existing = connection.execute("SELECT id,library_id FROM items").fetchall()
+    if not existing:
+        return
+    limit = float(os.environ.get("RECONCILE_MAX_DELETE_FRACTION", "0.35"))
+    if not 0 <= limit <= 1:
+        raise ValueError("RECONCILE_MAX_DELETE_FRACTION must be between 0 and 1")
+    if len(removed) / len(existing) > limit:
+        raise RuntimeError(f"{stage}: refusing suspicious deletion of {len(removed)}/{len(existing)} items")
+    counts, removed_counts = {}, {}
+    for row in existing:
+        library_id = row["library_id"]
+        counts[library_id] = counts.get(library_id, 0) + 1
+        if row["id"] in removed:
+            removed_counts[library_id] = removed_counts.get(library_id, 0) + 1
+    for library_id, count in counts.items():
+        if removed_counts.get(library_id, 0) / count > limit:
+            raise RuntimeError(f"{stage}: refusing suspicious deletion from library {library_id}")
+
+
+def prune_expired_caches(connection):
+    cutoff = int(time.time()) - 30 * 86400
+    connection.execute("DELETE FROM item_details WHERE fetched_at < ?", (cutoff,))
+    tables = {row[0] for row in connection.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name IN "
+        "('series_season_cache','season_episode_cache')"
+    )}
+    for table in ("series_season_cache", "season_episode_cache"):
+        if table in tables:
+            connection.execute(
+                f"DELETE FROM {table} WHERE fetched_at < ? "
+                "OR series_id NOT IN (SELECT id FROM items WHERE media_type='tvshow')",
+                (cutoff,)
+            )
+
+
 def set_sync_state(connection, state, **extra):
     set_meta(connection, "sync_state", state)
     set_meta(connection, "sync_updated_at", int(time.time()))
@@ -110,6 +157,10 @@ def bootstrap(client, connection, *, reason="initial bootstrap"):
         progress_library="",
     )
 
+    persist_libraries(connection, libraries)
+    connection.commit()
+    fts_enabled = get_meta(connection, "fts_enabled", "0") == "1"
+
     print(
         f"Catalogue v2 bootstrap: {len(libraries)} libraries, lightweight page target {page_limit}",
         flush=True,
@@ -146,7 +197,7 @@ def bootstrap(client, connection, *, reason="initial bootstrap"):
                     )
                     if record is None:
                         continue
-                    upsert_light_item(connection, record)
+                    upsert_light_item(connection, record, fts_enabled=fts_enabled)
                     accepted += 1
                 total += accepted
                 library_total += accepted
@@ -173,6 +224,7 @@ def bootstrap(client, connection, *, reason="initial bootstrap"):
             "SELECT id FROM items WHERE generation <> ?", (generation,)
         )
     ]
+    deletion_guard(connection, stale_ids, stage="bootstrap")
     connection.execute("BEGIN IMMEDIATE")
     try:
         removed = delete_items(connection, stale_ids)
@@ -206,6 +258,7 @@ def fetch_delta_for_library(client, connection, user_id, library, min_saved, gen
     start_index = 0
     current_limit = max(50, int(os.environ.get("CATALOGUE_DELTA_PAGE_SIZE", DEFAULT_DELTA_PAGE_SIZE)))
     changed = 0
+    fts_enabled = get_meta(connection, "fts_enabled", "0") == "1"
     while True:
         params = client.light_params(
             user_id,
@@ -225,8 +278,9 @@ def fetch_delta_for_library(client, connection, user_id, library, min_saved, gen
                 record = light_item_from_api(
                     item, library["id"], library["media_type"], generation
                 )
-                if record is not None:
-                    upsert_light_item(connection, record)
+                if record is not None and upsert_light_item(
+                    connection, record, fts_enabled=fts_enabled, skip_unchanged=True
+                ):
                     changed += 1
             connection.commit()
         except Exception:
@@ -268,6 +322,7 @@ def fetch_inventory_ids(client, user_id, library):
 def refresh_inventory_items(client, connection, user_id, seen, refresh_ids, generation):
     batch_size = max(25, int(os.environ.get("CATALOGUE_ID_DETAIL_BATCH", DEFAULT_ID_DETAIL_BATCH)))
     refreshed = 0
+    fts_enabled = get_meta(connection, "fts_enabled", "0") == "1"
     for offset in range(0, len(refresh_ids), batch_size):
         batch = refresh_ids[offset : offset + batch_size]
         params = client.light_params(user_id, ids=batch, start_index=0, limit=len(batch))
@@ -283,7 +338,7 @@ def refresh_inventory_items(client, connection, user_id, seen, refresh_ids, gene
                 library_id, media_type = target
                 record = light_item_from_api(item, library_id, media_type, generation)
                 if record is not None:
-                    upsert_light_item(connection, record)
+                    upsert_light_item(connection, record, fts_enabled=fts_enabled)
                     refreshed += 1
             connection.commit()
         except Exception:
@@ -321,12 +376,7 @@ def reconcile(client, connection, user_id, libraries, generation):
         if existing[item_id] != seen[item_id]
     }
 
-    max_delete_fraction = float(os.environ.get("RECONCILE_MAX_DELETE_FRACTION", "0.35"))
-    if existing and deleted and len(deleted) / len(existing) > max_delete_fraction:
-        raise RuntimeError(
-            f"reconciliation safety guard: refusing to delete {len(deleted):,}/{len(existing):,} "
-            f"items ({len(deleted)/len(existing):.1%})"
-        )
+    deletion_guard(connection, deleted, stage="reconciliation")
 
     refresh_ids = sorted(new | moved)
     refreshed = refresh_inventory_items(
@@ -336,6 +386,7 @@ def reconcile(client, connection, user_id, libraries, generation):
     connection.execute("BEGIN IMMEDIATE")
     try:
         removed = delete_items(connection, deleted)
+        prune_expired_caches(connection)
         set_meta(connection, "last_reconcile", int(time.time()))
         set_meta(connection, "last_reconcile_ids", total_seen)
         connection.commit()
@@ -371,6 +422,8 @@ def incremental(client, connection):
     generation = int(get_meta(connection, "current_generation", "0") or 0)
 
     set_sync_state(connection, "incremental", sync_reason=f"changes since {min_saved}")
+    persist_libraries(connection, libraries)
+    connection.commit()
     print(f"Incremental lightweight sync since {min_saved}", flush=True)
     changed = 0
     for library in libraries:

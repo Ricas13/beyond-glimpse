@@ -31,3 +31,16 @@ jobs:
         run: python -m unittest discover -s tests -v
       - name: Build container image
         run: docker build --tag beyond-glimpse:test .
+      - name: Verify real container starts the catalogue API
+        run: |
+          docker run -d --name beyond-glimpse-ci -p 127.0.0.1:18090:80 \
+            -e PRIMARY_SERVER=jellyfin -e JELLYFIN_URL=http://127.0.0.1:9999 \
+            -e JELLYFIN_TOKEN=ci-dummy beyond-glimpse:test
+          success=0
+          for attempt in $(seq 1 20); do
+            if curl -fsS http://127.0.0.1:18090/api/status; then success=1; break; fi
+            sleep 2
+          done
+          docker logs beyond-glimpse-ci --tail 100 || true
+          docker stop beyond-glimpse-ci || true
+          if [ "$success" -ne 1 ]; then exit 1; fi

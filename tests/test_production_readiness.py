@@ -35,6 +35,7 @@ class ProductionReadinessTests(unittest.TestCase):
         self.assertIn("COPY VERSION /app/VERSION", dockerfile)
         self.assertIn("catalogue_service.py", dockerfile)
         self.assertIn("catalogue_sync.py", dockerfile)
+        self.assertIn("COPY scripts/catalogue_present_only.py /app/scripts/", dockerfile)
 
     def test_initial_sync_commands_keep_tokens_out_of_argv(self):
         with patch.dict(
@@ -56,7 +57,8 @@ class ProductionReadinessTests(unittest.TestCase):
         self.assertNotIn("plex-secret", flattened)
         self.assertNotIn("--token", flattened)
         self.assertIn("catalogue_sync.py", flattened)
-        self.assertIn("--bootstrap", flattened)
+        self.assertIn("--incremental", flattened)
+        self.assertNotIn("--bootstrap", flattened)
         self.assertNotIn("ultralight_jellyfin.py", json.dumps(initial_sync.command_for("jellyfin")))
 
     def test_initial_sync_status_is_atomic_and_publicly_safe(self):

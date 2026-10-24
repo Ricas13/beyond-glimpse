@@ -36,6 +36,10 @@ class PublicWebSecurityTests(unittest.TestCase):
         for marker in ("image-state", "checksums", "catalog", "sync", "^/data/.*/\\."):
             self.assertIn(marker, nginx)
 
+    def test_legacy_jellyfin_data_is_not_public(self):
+        nginx = (ROOT / "config" / "nginx.conf").read_text(encoding="utf-8")
+        self.assertIn("location ^~ /data/jellyfin/", nginx)
+
     def test_static_cache_location_does_not_shadow_security_headers(self):
         nginx = (ROOT / "config" / "nginx.conf").read_text(encoding="utf-8")
         match = re.search(

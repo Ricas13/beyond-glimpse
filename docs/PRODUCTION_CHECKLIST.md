@@ -138,6 +138,15 @@ Test at least one desktop browser and one phone:
 - tab switching between movies/TV requests the appropriate API data.
 
 ## 8. Resource baseline
+Note: ordinary restarts now run incremental sync; an absent or incomplete catalogue
+automatically bootstraps. If a scan would unexpectedly remove more than the configured
+deletion fraction (globally or from any library), it fails safely instead of
+silently deleting existing records. Investigate Jellyfin library visibility before
+manually overriding the deletion threshold.
+
+Set `MAX_API_THREADS` to bound concurrent catalogue requests (default 24).
+The browser cancels obsolete browse requests and limits remembered episode payloads.
+
 
 Capture:
 

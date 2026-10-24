@@ -41,6 +41,7 @@ def main():
 
     check("internal health", lambda: f"HTTP {get(f'{LOCAL_URL}/healthz')[0]}", failures)
     check("catalogue API health", lambda: f"HTTP {get(f'{LOCAL_URL}/api/status')[0]}", failures)
+    check("library listing", lambda: f"HTTP {get(f'{LOCAL_URL}/api/libraries?type=movie')[0]}", failures)
 
     def status_ok():
         status, payload = get_json(f"{LOCAL_URL}/api/status")

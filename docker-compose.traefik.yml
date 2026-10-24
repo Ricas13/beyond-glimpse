@@ -31,7 +31,7 @@ services:
       - "traefik.http.routers.beyond-glimpse.tls=true"
       - "traefik.http.routers.beyond-glimpse.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}"
       - "traefik.http.services.beyond-glimpse.loadbalancer.server.port=80"
-      - "traefik.http.services.beyond-glimpse.loadbalancer.healthcheck.path=/healthz"
+      - "traefik.http.services.beyond-glimpse.loadbalancer.healthcheck.path=/api/status"
       - "traefik.http.services.beyond-glimpse.loadbalancer.healthcheck.interval=30s"
       - "traefik.http.services.beyond-glimpse.loadbalancer.healthcheck.timeout=5s"
 

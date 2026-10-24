@@ -44,20 +44,23 @@ def db_path():
     return Path(os.environ.get("CATALOGUE_DB", DEFAULT_DB_PATH))
 
 
-def open_db(path=None, *, readonly=False):
+def open_db(path=None, *, readonly=False, initialize=True):
+    """Read-only requests never initialise or write catalogue schema."""
     path = Path(path or db_path())
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if readonly and path.exists():
+    if readonly:
         connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=30)
     else:
+        path.parent.mkdir(parents=True, exist_ok=True)
         connection = sqlite3.connect(path, timeout=30)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA busy_timeout=30000")
     connection.execute("PRAGMA foreign_keys=ON")
     if not readonly:
-        connection.execute("PRAGMA journal_mode=WAL")
+        if initialize:
+            connection.execute("PRAGMA journal_mode=WAL")
         connection.execute("PRAGMA synchronous=NORMAL")
-        ensure_schema(connection)
+        if initialize:
+            ensure_schema(connection)
     return connection
 
 
@@ -162,7 +165,17 @@ def light_item_from_api(item, library_id, media_type, generation):
     }
 
 
-def upsert_light_item(connection, record):
+def upsert_light_item(connection, record, *, fts_enabled=None, skip_unchanged=False):
+    if skip_unchanged:
+        existing = connection.execute(
+            """SELECT library_id,media_type,title,sort_title,year,date_added,genres_json,poster_tag
+               FROM items WHERE id=?""", (record["id"],)
+        ).fetchone()
+        if existing is not None and all(existing[key] == record[key] for key in (
+            "library_id", "media_type", "title", "sort_title", "year",
+            "date_added", "genres_json", "poster_tag"
+        )):
+            return False
     connection.execute(
         """
         INSERT INTO items(
@@ -194,12 +207,13 @@ def upsert_light_item(connection, record):
             "INSERT OR IGNORE INTO item_genres(item_id,genre) VALUES(?,?)",
             ((record["id"], genre) for genre in record["genres"]),
         )
-    if get_meta(connection, "fts_enabled", "0") == "1":
+    if (get_meta(connection, "fts_enabled", "0") == "1") if fts_enabled is None else fts_enabled:
         connection.execute("DELETE FROM items_fts WHERE id = ?", (record["id"],))
         connection.execute(
             "INSERT INTO items_fts(id,title,genres) VALUES(?,?,?)",
             (record["id"], record["title"], " ".join(record["genres"])),
         )
+    return True
 
 
 def delete_items(connection, item_ids):
@@ -402,6 +416,7 @@ class JellyfinClient:
     def fetch_poster(self, item_id, tag, max_width, quality):
         response = self.session.get(
             f"{self.url}/Items/{item_id}/Images/Primary",
+            stream=True,
             params={
                 "tag": tag,
                 "maxWidth": int(max_width),
@@ -411,5 +426,16 @@ class JellyfinClient:
             headers={"Accept": "image/jpeg,image/*"},
             timeout=(10, self.timeout),
         )
-        response.raise_for_status()
-        return response.content, response.headers.get("Content-Type", "image/jpeg")
+        try:
+            response.raise_for_status()
+            # A corrupt or unexpectedly huge poster must not exhaust API memory.
+            max_bytes = 3 * 1024 * 1024
+            pieces, size = [], 0
+            for chunk in response.iter_content(chunk_size=64 * 1024):
+                size += len(chunk)
+                if size > max_bytes:
+                    raise requests.RequestException("Jellyfin poster exceeds 3 MiB cap")
+                pieces.append(chunk)
+            return b"".join(pieces), response.headers.get("Content-Type", "image/jpeg")
+        finally:
+            response.close()

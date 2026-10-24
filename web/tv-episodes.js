@@ -11,6 +11,13 @@
     const seasonPromises = new Map();
     const episodePromises = new Map();
     let modalGeneration = 0;
+    let seasonSelectionGeneration = 0;
+    const MAX_CACHED_SERIES = 40;
+    const MAX_CACHED_SEASONS = 100;
+
+    function boundPromiseCache(cache, maxSize) {
+        while (cache.size > maxSize) cache.delete(cache.keys().next().value);
+    }
 
     function addStyles() {
         if (document.getElementById('bg-tv-episodes-style')) return;
@@ -191,6 +198,7 @@
                     throw error;
                 }));
         }
+        boundPromiseCache(seasonPromises, MAX_CACHED_SERIES);
         return seasonPromises.get(seriesId);
     }
 
@@ -208,6 +216,7 @@
                     throw error;
                 }));
         }
+        boundPromiseCache(episodePromises, MAX_CACHED_SEASONS);
         return episodePromises.get(key);
     }
 
@@ -276,6 +285,7 @@
     }
 
     async function selectSeason(seriesId, season, tabs, content, generation) {
+        const selectionGeneration = ++seasonSelectionGeneration;
         for (const button of tabs.querySelectorAll('.bg-season-tab')) {
             button.classList.toggle('active', button.dataset.seasonId === season.id);
             button.setAttribute('aria-selected', button.dataset.seasonId === season.id ? 'true' : 'false');
@@ -283,10 +293,10 @@
         status(content, `Loading ${season.name || 'season'}…`);
         try {
             const payload = await loadEpisodes(seriesId, season.id);
-            if (generation !== modalGeneration) return;
+            if (generation !== modalGeneration || selectionGeneration !== seasonSelectionGeneration) return;
             renderEpisodes(content, Array.isArray(payload.episodes) ? payload.episodes : []);
         } catch (error) {
-            if (generation !== modalGeneration) return;
+            if (generation !== modalGeneration || selectionGeneration !== seasonSelectionGeneration) return;
             console.warn('Could not load TV episodes:', error);
             status(content, 'Episodes are temporarily unavailable.');
         }

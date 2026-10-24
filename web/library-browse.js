@@ -196,23 +196,30 @@
     }
 
     function selectLibrary(type, id, name) {
+        if (selected[type] === id) {
+            closeMenus();
+            return;
+        }
         selected[type] = id;
         updateControl(type, name);
         closeMenus();
 
         const targetTab = tabType(type);
-        if (typeof switchTab === 'function') switchTab(targetTab);
-
-        // Re-run v2 loading so both the item page and genre counts are scoped to
-        // the selected library. This is local SQLite work; Jellyfin is untouched.
-        setTimeout(() => {
-            if (typeof loadMedia === 'function') loadMedia();
-        }, 0);
+        const activeTab = document.querySelector('.tab.active')?.dataset.content;
+        if (activeTab !== targetTab && typeof switchTab === 'function') {
+            switchTab(targetTab);
+        } else if (typeof filterAndSortMedia === 'function') {
+            filterAndSortMedia(document.querySelector('.search-input')?.value || '');
+        }
+        // A library selection refreshes only its own lightweight SQL result set.
+        if (typeof window.__beyondGlimpseRefreshGenres === 'function') {
+            window.__beyondGlimpseRefreshGenres();
+        }
     }
 
     async function loadLibraryList(type) {
         try {
-            const response = await originalFetch(`/api/libraries?type=${encodeURIComponent(type)}`, { cache: 'no-store' });
+            const response = await originalFetch(`/api/libraries?type=${encodeURIComponent(type)}`);
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
             const payload = await response.json();
             libraryLists[type] = Array.isArray(payload.libraries) ? payload.libraries : [];
@@ -256,15 +263,14 @@
         });
 
         // Clicking the primary Movies/TV Shows pill means "All" for that type.
+        // Capture before Glimpse's bubble-phase switchTab listener. Its single
+        // catalogue reload will use "All" rather than the previously selected ID.
         tab.addEventListener('click', () => {
             if (!selected[type]) return;
             selected[type] = '';
             updateControl(type);
             closeMenus();
-            setTimeout(() => {
-                if (typeof loadMedia === 'function') loadMedia();
-            }, 0);
-        });
+        }, { capture: true });
     }
 
     function init() {

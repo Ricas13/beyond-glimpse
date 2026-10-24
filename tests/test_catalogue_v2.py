@@ -218,9 +218,10 @@ class CatalogueV2Tests(unittest.TestCase):
             {"id": "lib-a", "name": "Main Movies", "media_type": "movie"},
             {"id": "tv-a", "name": "Main TV", "media_type": "tvshow"},
         ]
-        with patch.object(service.CatalogueHandler, "cached_libraries", return_value=libraries):
-            with patch.dict(os.environ, {"CATALOGUE_DB": str(path)}, clear=False):
-                status, payload = handler.handle_libraries({"type": ["movie"]})
+        core.set_meta(connection, "libraries_json", json.dumps(libraries))
+        connection.commit()
+        with patch.dict(os.environ, {"CATALOGUE_DB": str(path)}, clear=False):
+            status, payload = handler.handle_libraries({"type": ["movie"]})
 
         self.assertEqual(status, 200)
         self.assertEqual(payload["total"], 3)
@@ -262,8 +263,47 @@ class CatalogueV2Tests(unittest.TestCase):
         source = (ROOT / "web" / "library-browse.js").read_text(encoding="utf-8")
         self.assertIn("/api/libraries", source)
         self.assertIn("url.searchParams.set('library'", source)
+        self.assertIn("capture: true", source)
         self.assertNotIn("JELLYFIN_TOKEN", source)
         self.assertNotIn("JELLYFIN_URL", source)
+
+    def test_full_bootstrap_keeps_existing_data_on_partial_inventory(self):
+        connection, _ = self.make_db()
+        for item_id, lib in (
+            ("movie-1", "lib-1"), ("movie-2", "lib-1"), ("missing", "other-lib")
+        ):
+            record = core.light_item_from_api(
+                {"Id": item_id, "Name": item_id, "Genres": []}, lib, "movie", 1
+            )
+            core.upsert_light_item(connection, record)
+        connection.commit()
+        with self.assertRaisesRegex(RuntimeError, "refusing suspicious deletion"):
+            sync.bootstrap(FakeBootstrapClient(), connection)
+        self.assertIsNotNone(
+            connection.execute("SELECT id FROM items WHERE id='missing'").fetchone()
+        )
+
+    def test_read_only_db_does_not_create_database(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            missing = Path(tmp) / "missing.db"
+            with self.assertRaises(Exception):
+                core.open_db(missing, readonly=True)
+            self.assertFalse(missing.exists())
+
+    def test_unchanged_delta_does_not_rewrite_fts_and_genres(self):
+        connection, _ = self.make_db()
+        record = core.light_item_from_api(
+            {"Id": "unchanged", "Name": "Same Title", "Genres": ["Drama"]}, "lib", "movie", 1
+        )
+        self.assertTrue(core.upsert_light_item(connection, record, skip_unchanged=True))
+        connection.commit()
+        previous = connection.execute("SELECT updated_at FROM items WHERE id='unchanged'").fetchone()[0]
+        record["updated_at"] = previous + 100
+        self.assertFalse(core.upsert_light_item(connection, record, skip_unchanged=True))
+        self.assertEqual(
+            connection.execute("SELECT updated_at FROM items WHERE id='unchanged'").fetchone()[0],
+            previous,
+        )
 
     def test_scheduler_defaults_to_ten_minutes(self):
         source = (ROOT / "scripts" / "catalogue_scheduler.py").read_text(encoding="utf-8")
