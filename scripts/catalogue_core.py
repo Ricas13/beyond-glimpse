@@ -56,7 +56,8 @@ def open_db(path=None, *, readonly=False, initialize=True):
     connection.execute("PRAGMA busy_timeout=30000")
     connection.execute("PRAGMA foreign_keys=ON")
     if not readonly:
-        connection.execute("PRAGMA journal_mode=WAL")
+        if initialize:
+            connection.execute("PRAGMA journal_mode=WAL")
         connection.execute("PRAGMA synchronous=NORMAL")
         if initialize:
             ensure_schema(connection)

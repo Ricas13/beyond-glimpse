@@ -348,7 +348,7 @@
         if (apiSearch) params.set('q', apiSearch);
         if (currentGenre && currentGenre !== 'all') params.set('genre', currentGenre);
         try {
-            const response = await fetch(`/api/items?${params}`, { cache: 'no-store', signal: controller.signal });
+            const response = await fetch(`/api/items?${params}`, { signal: controller.signal });
             if (!response.ok) throw new Error(`catalogue API returned ${response.status}`);
             const payload = await response.json();
             if (generation !== queryGeneration) return;
@@ -400,7 +400,7 @@
     async function loadApiGenres() {
         const type = activeTabType();
         const generation = ++genreGeneration;
-        const response = await fetch(`/api/genres?type=${apiMediaType(type)}`, { cache: 'no-store' });
+        const response = await fetch(`/api/genres?type=${apiMediaType(type)}`);
         if (!response.ok) throw new Error(`genre request failed: ${response.status}`);
         const payload = await response.json();
         // An earlier response must not repaint counts for a newer library selection.

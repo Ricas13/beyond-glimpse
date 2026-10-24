@@ -263,6 +263,7 @@ class CatalogueV2Tests(unittest.TestCase):
         source = (ROOT / "web" / "library-browse.js").read_text(encoding="utf-8")
         self.assertIn("/api/libraries", source)
         self.assertIn("url.searchParams.set('library'", source)
+        self.assertIn("capture: true", source)
         self.assertNotIn("JELLYFIN_TOKEN", source)
         self.assertNotIn("JELLYFIN_URL", source)
 

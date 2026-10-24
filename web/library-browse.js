@@ -215,7 +215,7 @@
 
     async function loadLibraryList(type) {
         try {
-            const response = await originalFetch(`/api/libraries?type=${encodeURIComponent(type)}`, { cache: 'no-store' });
+            const response = await originalFetch(`/api/libraries?type=${encodeURIComponent(type)}`, );
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
             const payload = await response.json();
             libraryLists[type] = Array.isArray(payload.libraries) ? payload.libraries : [];
@@ -259,20 +259,14 @@
         });
 
         // Clicking the primary Movies/TV Shows pill means "All" for that type.
+        // Capture before Glimpse's bubble-phase switchTab listener. Its single
+        // catalogue reload will use "All" rather than the previously selected ID.
         tab.addEventListener('click', () => {
             if (!selected[type]) return;
             selected[type] = '';
             updateControl(type);
             closeMenus();
-            // The upstream click handler runs before this callback and may have
-            // fetched the old library. Reload once with the now-cleared selection.
-            if (typeof filterAndSortMedia === 'function') {
-                filterAndSortMedia(document.querySelector('.search-input')?.value || '');
-            }
-            if (typeof window.__beyondGlimpseRefreshGenres === 'function') {
-                window.__beyondGlimpseRefreshGenres();
-            }
-        });
+        }, { capture: true });
     }
 
     function init() {

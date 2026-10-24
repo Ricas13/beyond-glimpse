@@ -355,6 +355,7 @@ class CatalogueHandler(BaseHTTPRequestHandler):
                     "genre": genre,
                     "library": library_id,
                 },
+                cache_control="public, max-age=15",
             )
         finally:
             connection.close()
