@@ -22,15 +22,15 @@
     let livePanel = null;
     const live = { open: false, query: '', offset: 0, hasMore: false, loading: false, total: 0, generation: 0, observer: null, controller: null, progressTimer: null, searchTimer: null };
 
-    // Libraries are ordered the way their names are prefixed: each leading "_"
-    // lowers a library one step ("_Movies" before "__Movies - DE"), libraries with
-    // no underscore come after all prefixed ones, and ties are alphabetical with
-    // the prefix ignored and numbers compared naturally.
+    // Libraries are ordered by how their names are prefixed: libraries with no
+    // leading "_" come first, then "_" libraries, then "__" libraries (each extra
+    // underscore pushes a library lower). Within a group the order is alphabetical,
+    // ignoring the prefix and comparing numbers naturally.
     const nameCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
     const sortableName = name => String(name || '').replace(/^[^\p{L}\p{N}]+/u, '');
     const underscoreRank = name => {
         const match = /^_+/.exec(String(name || ''));
-        return match ? match[0].length : Number.MAX_SAFE_INTEGER;
+        return match ? match[0].length : 0;
     };
     function compareLibraries(a, b) {
         const rankA = underscoreRank(a.name);

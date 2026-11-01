@@ -23,10 +23,10 @@ OLD_SCRIPT_TAGS = (
     '    <script src="/large-library.js?v=4"></script>',
     '    <script src="/large-library.js?v=5"></script>',
 )
-LIBRARY_BROWSE_TAG = '    <script src="/library-browse.js?v=4"></script>'
+LIBRARY_BROWSE_TAG = '    <script src="/library-browse.js?v=5"></script>'
 TV_EPISODES_TAG = '    <script src="/tv-episodes.js?v=2"></script>'
 STARTUP_STATUS_TAG = '    <script src="/startup-status.js?v=3"></script>'
-JELLYFIN_UI_TAG = '    <script src="/jellyfin-ui.js?v=5"></script>'
+JELLYFIN_UI_TAG = '    <script src="/jellyfin-ui.js?v=6"></script>'
 JELLYFIN_UI_CSS = '    <link rel="stylesheet" href="/jellyfin-ui.css?v=4">'
 OLD_STARTUP_TAGS = (
     '    <script src="/startup-status.js?v=1"></script>',
