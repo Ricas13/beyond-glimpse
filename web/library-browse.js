@@ -148,6 +148,7 @@
     // Read-only view of the selection plus an entry point used by the
     // Jellyfin-style navigation drawer (jellyfin-ui.js).
     window.__beyondGlimpseLibraryState = { selected, libraryLists };
+    window.__beyondGlimpseReloadLibraries = () => Promise.all([loadLibraryList('movie'), loadLibraryList('tvshow')]);
     window.__beyondGlimpseSelectLibrary = (type, id, name) => selectLibrary(normalizeType(type), id || '', name || '');
 
     function closeMenus(exceptType = '') {
@@ -230,17 +231,20 @@
     }
 
     async function loadLibraryList(type) {
+        let loaded = true;
         try {
-            const response = await originalFetch(`/api/libraries?type=${encodeURIComponent(type)}`);
+            const response = await originalFetch(`/api/libraries?type=${encodeURIComponent(type)}`, { cache: 'no-store' });
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
             const payload = await response.json();
             libraryLists[type] = Array.isArray(payload.libraries) ? payload.libraries : [];
         } catch (error) {
             console.warn(`Could not load ${type} libraries:`, error);
             libraryLists[type] = [];
+            loaded = false;
         }
         renderMenu(type);
         announceState();
+        return loaded;
     }
 
     function decorate(type) {

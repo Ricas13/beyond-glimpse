@@ -71,6 +71,13 @@ def persist_libraries(connection, libraries):
 MIN_GUARDED_LIBRARY_SIZE = 20
 
 
+def stored_libraries(connection):
+    try:
+        return json.loads(get_meta(connection, "libraries_json", "[]") or "[]") or []
+    except (TypeError, ValueError):
+        return []
+
+
 def deliberately_removed_library_ids(previous_libraries_json, libraries):
     """Library IDs that left the eligible set because the operator asked.
 
@@ -228,6 +235,10 @@ def bootstrap(client, connection, *, reason="initial bootstrap"):
     )
     # Retain the last known library IDs/names until the guarded bootstrap
     # succeeds; a failed partial listing must not erase exclusion-by-name data.
+    # On a first run there is nothing to protect, and the browse UI needs library
+    # names while the (possibly long) initial index is still running.
+    if not stored_libraries(connection):
+        persist_libraries(connection, libraries)
     connection.commit()
     fts_enabled = get_meta(connection, "fts_enabled", "0") == "1"
 

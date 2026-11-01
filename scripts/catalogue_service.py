@@ -302,7 +302,24 @@ class CatalogueHandler(BaseHTTPRequestHandler):
                 libraries = json.loads(get_meta(connection, "libraries_json", "[]") or "[]")
             except (ValueError, TypeError):
                 libraries = []
-            libraries = [lib for lib in libraries if lib.get("media_type") == media_type]
+            if not libraries:
+                # No library list has been stored yet (first index still running):
+                # fall back to Jellyfin's live list so names can be shown, with
+                # counts from whatever has been indexed so far.
+                try:
+                    libraries = self.cached_libraries()
+                except Exception as exc:
+                    # Live discovery is a best-effort first-run fallback, never a
+                    # prerequisite for serving the existing local catalogue.
+                    print(f"catalogue-api library list unavailable: {exc}", flush=True)
+                    libraries = []
+            if not isinstance(libraries, list):
+                libraries = []
+            libraries = [
+                lib for lib in libraries
+                if isinstance(lib, dict) and lib.get("media_type") == media_type
+            ]
+            settled = get_meta(connection, "bootstrap_complete", "0") == "1"
             counts = {
                 str(row["library_id"]): int(row["count"])
                 for row in connection.execute(
@@ -336,7 +353,8 @@ class CatalogueHandler(BaseHTTPRequestHandler):
                     "total": sum(counts.values()),
                     "libraries": payload,
                 },
-                cache_control="public, max-age=300",
+                # Counts move while the first index runs; only cache once settled.
+                cache_control="public, max-age=300" if settled else "no-store",
             )
         finally:
             connection.close()

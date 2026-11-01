@@ -149,9 +149,34 @@
         }
     }
 
+    // Refresh while indexing, even if the grand total has not changed (e.g.
+    // items moved between libraries, or a previous list request failed).
+    // Schedule only after this invocation completes so requests never overlap.
+    async function pollCounts() {
+        let settled = false;
+        const controller = new AbortController();
+        const deadline = setTimeout(() => controller.abort(), 10000);
+        try {
+            const response = await fetch('/api/status', { cache: 'no-store', signal: controller.signal });
+            if (response.ok) {
+                const status = await response.json();
+                let librariesLoaded = true;
+                if (typeof window.__beyondGlimpseReloadLibraries === 'function') {
+                    const results = await window.__beyondGlimpseReloadLibraries();
+                    librariesLoaded = Array.isArray(results) && results.every(Boolean);
+                }
+                // Do not permanently stop after a failed final library request.
+                settled = Boolean(status.bootstrapComplete) && status.state !== 'bootstrap' && librariesLoaded;
+            }
+        } catch (_) { /* the API may still be starting; retry later */ }
+        finally { clearTimeout(deadline); }
+        if (!settled) setTimeout(pollCounts, 8000);
+    }
+
     function init() {
         buildTitle();
         buildDrawer();
+        pollCounts();
 
         window.addEventListener('bg:library-state', renderDrawer);
         const tabs = document.querySelector('.header .tabs');
