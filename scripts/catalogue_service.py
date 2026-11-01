@@ -74,6 +74,51 @@ def episode_from_api(item):
     }
 
 
+def present_season_ids(client, user_id, series_id):
+    """Season IDs containing at least one present episode.
+
+    Return None if a present episode has no SeasonId: membership is unknown,
+    so do not hide a valid season. An empty response means no present seasons.
+    Page explicitly because Jellyfin may cap /Items results below our Limit.
+    """
+    ids = set()
+    offset = 0
+    page_size = 1000
+    while True:
+        data = client.get_json(
+            "/Items",
+            params={
+                "ParentId": series_id,
+                "Recursive": "true",
+                "IncludeItemTypes": "Episode",
+                "StartIndex": offset,
+                "Limit": page_size,
+                "EnableTotalRecordCount": "true",
+                "EnableUserData": "false",
+                "EnableImages": "false",
+                "UserId": user_id,
+            },
+        )
+        items = data.get("Items") or []
+        if not items:
+            return ids
+        for item in items:
+            # Looked up at call time so the present-only policy's filter applies.
+            if episode_from_api(item) is None:
+                continue
+            season_id = str(item.get("SeasonId") or "")
+            if not season_id:
+                return None
+            ids.add(season_id)
+        offset += len(items)
+        total = data.get("TotalRecordCount")
+        if total is not None:
+            try:
+                if offset >= int(total):
+                    return ids
+            except (TypeError, ValueError):
+                pass
+
 def season_sort_key(season):
     index_number = season.get("indexNumber")
     if index_number == 0:
@@ -485,6 +530,9 @@ class CatalogueHandler(BaseHTTPRequestHandler):
                 parsed = season_from_api(item)
                 if parsed is not None:
                     seasons.append(parsed)
+            present = present_season_ids(self.jellyfin, user_id, series_id)
+            if present is not None:
+                seasons = [season for season in seasons if season["id"] in present]
             seasons.sort(key=season_sort_key)
             payload = {"seriesId": series_id, "seasons": seasons}
             connection.execute(
