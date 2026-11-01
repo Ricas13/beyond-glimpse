@@ -74,7 +74,7 @@ class LibraryListFirstRunTests(unittest.TestCase):
 
     def test_failed_live_lookup_is_not_an_api_500(self):
         _, path = self.make_db()
-        for error in (RuntimeError("bad Jellyfin response"), ValueError("invalid JSON")):
+        for error in (RuntimeError("bad Jellyfin response"), ValueError("invalid JSON"), AttributeError("unexpected library object")):
             sent = self.call_handle_libraries(path, error)
             self.assertEqual(sent["status"], 200)
             self.assertEqual(sent["payload"]["libraries"], [])
