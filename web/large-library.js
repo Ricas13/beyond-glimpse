@@ -17,6 +17,7 @@
     let activePageController = null;
     let genreGeneration = 0;
     let modalOpenGeneration = 0;
+    let lastCardActivator = null;
     let apiRetryTimer = null;
     let apiRetryCount = 0;
     let apiHasMore = false;
@@ -228,6 +229,21 @@
         mediaItem.className = 'media-item';
         mediaItem.dataset.id = item.id;
         mediaItem.dataset.type = type;
+        // Operable from the keyboard: Tab to a card, Enter or Space opens it.
+        mediaItem.tabIndex = 0;
+        mediaItem.setAttribute('role', 'button');
+        if (item.title) mediaItem.setAttribute('aria-label', item.title);
+        function activateCard() {
+            lastCardActivator = mediaItem;
+            openModal(item, type);
+        }
+        mediaItem.addEventListener('keydown', event => {
+            if (event.target !== mediaItem || event.repeat) return;
+            if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                activateCard();
+            }
+        });
         mediaItem.style.opacity = '0';
         mediaItem.style.transition = `opacity 0.2s ease ${Math.min(index, 10) * 0.012}s, transform 0.3s ease`;
 
@@ -261,7 +277,7 @@
         added.textContent = item.addedAt ? `Added: ${formatDate(item.addedAt)}` : '';
         info.append(title, year, added);
         mediaItem.append(posterContainer, info);
-        mediaItem.addEventListener('click', () => openModal(item, type));
+        mediaItem.addEventListener('click', activateCard);
         requestAnimationFrame(() => { mediaItem.style.opacity = '1'; });
         return mediaItem;
     }
@@ -625,8 +641,25 @@
     const originalCloseModal = closeModal;
     closeModal = function (...args) {
         ++modalOpenGeneration;
-        return originalCloseModal(...args);
+        const result = originalCloseModal(...args);
+        if (lastCardActivator) {
+            const target = lastCardActivator.isConnected
+                ? lastCardActivator
+                : document.querySelector('.tab.active') || document.querySelector('.media-item');
+            lastCardActivator = null;
+            if (target) target.focus();
+        }
+        return result;
     };
+    // The detail fetch is asynchronous. Move focus as soon as the modal
+    // becomes visible, not after the episode browser finishes loading.
+    if (modalOverlay) {
+        new MutationObserver(() => {
+            if (lastCardActivator && modalOverlay.classList.contains('active')) {
+                document.querySelector('.modal-close')?.focus();
+            }
+        }).observe(modalOverlay, { attributes: true, attributeFilter: ['class'] });
+    }
     loadMedia = v2LoadMedia;
 
     window.__beyondGlimpseLargeLibraryReady = true;

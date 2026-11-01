@@ -118,6 +118,7 @@
                 scroll.appendChild(item);
             }
         }
+        renderMobileLibraries(libraries, current, state);
         if (liveAvailable) {
             scroll.appendChild(el('div', 'jf-nav-heading', 'Live TV'));
             const item = navItem('jf-ico-live', 'Channels', null, openLive, 'live');
@@ -125,6 +126,52 @@
             scroll.appendChild(item);
         }
         updateTitle();
+    }
+
+    // Phones have no drawer: list the libraries in the slide-down menu instead.
+    function renderMobileLibraries(libraries, current, state) {
+        const menu = document.querySelector('.mobile-menu');
+        if (!menu) return;
+        let box = menu.querySelector('.jf-mlibs');
+        if (!box) {
+            box = el('div', 'jf-mlibs');
+            const tabs = menu.querySelector('.tabs');
+            if (tabs) tabs.after(box); else menu.prepend(box);
+        }
+        const focused = document.activeElement?.closest('.jf-mlib');
+        const focusId = focused?.dataset.libraryId;
+        const focusType = focused?.dataset.libraryType;
+        const previousList = box.querySelector('.jf-mlibs-list');
+        const scrollTop = previousList ? previousList.scrollTop : 0;
+        box.replaceChildren();
+        if (!libraries.length) return;
+        box.appendChild(el('div', 'jf-mlibs-heading', 'Libraries'));
+        const list = el('div', 'jf-mlibs-list');
+        for (const library of libraries) {
+            const item = el('button', 'jf-mlib');
+            item.type = 'button';
+            item.dataset.libraryId = library.id;
+            item.dataset.libraryType = library.entry.type;
+            item.classList.toggle('active', !live.open &&
+                current === library.entry.tab && state.selected[library.entry.type] === library.id);
+            item.append(el('span', `jf-ico ${library.entry.icon}`), el('span', 'jf-mlib-name', library.name),
+                el('span', 'jf-mlib-count', Number(library.count || 0).toLocaleString()));
+            item.addEventListener('click', () => {
+                if (typeof window.__beyondGlimpseSelectLibrary === 'function') {
+                    window.__beyondGlimpseSelectLibrary(library.entry.type, library.id, library.name);
+                }
+                if (live.open) closeLive();
+                menu.classList.remove('open');
+            });
+            list.appendChild(item);
+        }
+        box.appendChild(list);
+        list.scrollTop = scrollTop;
+        if (focusId && focusType && menu.classList.contains('open')) {
+            const match = Array.from(list.querySelectorAll('.jf-mlib')).find(item =>
+                item.dataset.libraryId === focusId && item.dataset.libraryType === focusType);
+            if (match) match.focus({ preventScroll: true });
+        }
     }
 
     function updateTitle() {

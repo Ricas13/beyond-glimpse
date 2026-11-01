@@ -490,20 +490,6 @@ html.jf-ui ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.4
 /* Library grids centre the title and year under each poster. */
 html.jf-ui .media-info { text-align: center; }
 
-/* Details-page action row sits under the metadata line; buttons are flat rectangles. */
-html.jf-ui .modal-actions { flex: 0 0 100%; margin-top: 1.1rem; gap: 0.6rem; }
-html.jf-ui .watch-trailer-btn {
-    background: var(--jf-accent) !important;
-    background-image: none !important;
-    color: #fff !important;
-    border-radius: 4px;
-    padding: 0.55rem 1.1rem;
-    font-weight: 500;
-    font-size: 0.95rem;
-    text-transform: uppercase;
-    letter-spacing: 0.02em;
-}
-html.jf-ui .watch-trailer-btn:hover { background: var(--jf-accent-hover) !important; }
 html.jf-ui .roulette-button {
     background: var(--jf-surface-2);
     color: var(--jf-text);
@@ -552,7 +538,7 @@ html.jf-ui .jf-livetab { display: none; cursor: pointer; border: 0; background: 
 html.jf-ui.jf-live-available .mobile-menu .jf-livetab {
     display: block;
     width: 100%;
-    padding: 12px;
+    padding: 12px 1.25rem;
     text-align: left;
     text-transform: uppercase;
     font-size: 0.85rem;
@@ -755,3 +741,36 @@ html.jf-ui .jf-menu-empty { padding: 0.6rem 0.9rem; font-size: 0.85rem; color: v
     html.jf-ui .jf-toolbar { position: static; order: 3; height: var(--jf-topbar-h); }
 }
 html.jf-ui.jf-live-open .header .jf-toolbar { visibility: hidden; }
+
+/* Keyboard focus on poster cards. */
+html.jf-ui .media-item { outline: none; }
+html.jf-ui .media-item:focus-visible .poster-container { box-shadow: 0 0 0 3px var(--jf-accent); }
+html.jf-ui .media-item:focus-visible .poster-container::after { opacity: 1; }
+html.jf-ui .media-item:focus-visible .poster-container::before { opacity: 1; transform: scale(1); }
+
+/* Library list inside the phone menu (wider screens use the drawer or tab menus). */
+html.jf-ui .jf-mlibs { display: none; }
+@media screen and (max-width: 768px) {
+    html.jf-ui .jf-mlibs { display: block; margin-top: 0.5rem; }
+    html.jf-ui .jf-mlibs-heading { padding: 0.6rem 1.25rem 0.3rem; font-size: 0.8rem; color: var(--jf-text-dim); }
+    html.jf-ui .jf-mlibs-list { max-height: 38vh; overflow-y: auto; }
+    html.jf-ui .jf-mlib {
+        display: flex;
+        align-items: center;
+        gap: 0.8rem;
+        width: 100%;
+        padding: 0.65rem 1.25rem;
+        border: 0;
+        background: transparent;
+        color: var(--jf-text);
+        font: inherit;
+        font-size: 0.92rem;
+        text-align: left;
+        cursor: pointer;
+    }
+    html.jf-ui .jf-mlib:hover { background: var(--jf-hover); }
+    html.jf-ui .jf-mlib.active { color: var(--jf-accent); background: var(--jf-hover); box-shadow: inset 3px 0 0 var(--jf-accent); }
+    html.jf-ui .jf-mlib .jf-ico { width: 1.3rem; height: 1.3rem; }
+    html.jf-ui .jf-mlib-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    html.jf-ui .jf-mlib-count { flex: none; font-size: 0.78rem; color: var(--jf-text-dim); }
+}
