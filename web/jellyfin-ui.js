@@ -138,6 +138,11 @@
             const tabs = menu.querySelector('.tabs');
             if (tabs) tabs.after(box); else menu.prepend(box);
         }
+        const focused = document.activeElement?.closest('.jf-mlib');
+        const focusId = focused?.dataset.libraryId;
+        const focusType = focused?.dataset.libraryType;
+        const previousList = box.querySelector('.jf-mlibs-list');
+        const scrollTop = previousList ? previousList.scrollTop : 0;
         box.replaceChildren();
         if (!libraries.length) return;
         box.appendChild(el('div', 'jf-mlibs-heading', 'Libraries'));
@@ -145,6 +150,8 @@
         for (const library of libraries) {
             const item = el('button', 'jf-mlib');
             item.type = 'button';
+            item.dataset.libraryId = library.id;
+            item.dataset.libraryType = library.entry.type;
             item.classList.toggle('active', !live.open &&
                 current === library.entry.tab && state.selected[library.entry.type] === library.id);
             item.append(el('span', `jf-ico ${library.entry.icon}`), el('span', 'jf-mlib-name', library.name),
@@ -153,11 +160,18 @@
                 if (typeof window.__beyondGlimpseSelectLibrary === 'function') {
                     window.__beyondGlimpseSelectLibrary(library.entry.type, library.id, library.name);
                 }
+                if (live.open) closeLive();
                 menu.classList.remove('open');
             });
             list.appendChild(item);
         }
         box.appendChild(list);
+        list.scrollTop = scrollTop;
+        if (focusId && focusType && menu.classList.contains('open')) {
+            const match = Array.from(list.querySelectorAll('.jf-mlib')).find(item =>
+                item.dataset.libraryId === focusId && item.dataset.libraryType === focusType);
+            if (match) match.focus({ preventScroll: true });
+        }
     }
 
     function updateTitle() {
@@ -618,7 +632,7 @@
         // Picking any library/tab leaves Live TV; Escape closes it too.
         document.addEventListener('click', event => {
             if (!live.open) return;
-            if (event.target.closest('.header .tab, .mobile-menu .tab, .jf-mlib, .jf-nav-item:not([data-nav="live"])')) closeLive();
+            if (event.target.closest('.header .tab, .mobile-menu .tab, .jf-nav-item:not([data-nav="live"])')) closeLive();
         }, true);
         document.addEventListener('keydown', event => {
             if (event.key === 'Escape' && live.open && !document.querySelector('.modal-overlay.active')) closeLive();
