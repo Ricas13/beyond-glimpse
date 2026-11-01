@@ -228,6 +228,16 @@
         mediaItem.className = 'media-item';
         mediaItem.dataset.id = item.id;
         mediaItem.dataset.type = type;
+        // Operable from the keyboard: Tab to a card, Enter or Space opens it.
+        mediaItem.tabIndex = 0;
+        mediaItem.setAttribute('role', 'button');
+        if (item.title) mediaItem.setAttribute('aria-label', item.title);
+        mediaItem.addEventListener('keydown', event => {
+            if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                openModal(item, type);
+            }
+        });
         mediaItem.style.opacity = '0';
         mediaItem.style.transition = `opacity 0.2s ease ${Math.min(index, 10) * 0.012}s, transform 0.3s ease`;
 
