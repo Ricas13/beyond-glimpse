@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import time
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -51,10 +52,16 @@ def parse_channel_number(value):
 
 
 def channel_from_api(item):
+    if not isinstance(item, dict):
+        return None
     channel_id = str(item.get("Id") or "")
-    if not channel_id:
+    # Match the Nginx route and never allow path/control characters in an
+    # upstream-provided identifier that will become part of a public image URL.
+    if not re.fullmatch(r"[0-9A-Za-z-]{1,128}", channel_id):
         return None
     program = item.get("CurrentProgram") or {}
+    if not isinstance(program, dict):
+        program = {}
     now = None
     if program.get("Name"):
         now = {
@@ -63,7 +70,10 @@ def channel_from_api(item):
             "start": str(program.get("StartDate") or ""),
             "end": str(program.get("EndDate") or ""),
         }
-    logo_tag = str((item.get("ImageTags") or {}).get("Primary") or "")
+    image_tags = item.get("ImageTags") or {}
+    logo_tag = str(image_tags.get("Primary") or "") if isinstance(image_tags, dict) else ""
+    if not re.fullmatch(r"[0-9A-Za-z._~-]{1,256}", logo_tag):
+        logo_tag = ""
     return {
         "id": channel_id,
         "name": str(item.get("Name") or ""),
@@ -758,16 +768,19 @@ class CatalogueHandler(BaseHTTPRequestHandler):
 
     @classmethod
     def load_channels(cls):
-        """Live TV channels from Jellyfin, cached briefly. Never raises.
+        """Return a short-lived list; one caller refreshes while others use stale data.
 
-        A server without Live TV (or a user without access) simply reports
-        available=False so the UI can hide the section. A failed refresh keeps
-        serving the last good list.
+        Never hold the refresh lock while another HTTP handler waits on Jellyfin:
+        a slow upstream should not consume every API worker on a public site.
         """
-        if cls.jellyfin is None:
-            return cls.channel_cache
         now = int(time.time())
-        with cls.channel_lock:
+        cache = cls.channel_cache
+        if cls.jellyfin is None or now - int(cache["fetched_at"]) < CHANNEL_CACHE_TTL_SECONDS:
+            return cache
+        if not cls.channel_lock.acquire(blocking=False):
+            return cls.channel_cache
+        try:
+            now = int(time.time())
             cache = cls.channel_cache
             if now - int(cache["fetched_at"]) < CHANNEL_CACHE_TTL_SECONDS:
                 return cache
@@ -778,7 +791,10 @@ class CatalogueHandler(BaseHTTPRequestHandler):
                 finally:
                     connection.close()
                 channels, offset = [], 0
-                while len(channels) < MAX_CHANNELS:
+                # Bound the number of upstream rows, including invalid entries.
+                # This also prevents servers that report inconsistent totals
+                # from keeping a request worker busy indefinitely.
+                while offset < MAX_CHANNELS:
                     data = cls.jellyfin.get_json(
                         "/LiveTv/Channels",
                         params={
@@ -789,23 +805,25 @@ class CatalogueHandler(BaseHTTPRequestHandler):
                             "EnableImageTypes": "Primary",
                             "EnableUserData": "false",
                             "StartIndex": offset,
-                            "Limit": 1000,
+                            "Limit": min(1000, MAX_CHANNELS - offset),
                         },
                     )
                     items = data.get("Items") or []
+                    if not isinstance(items, list):
+                        raise ValueError("Jellyfin returned an invalid channel page")
                     if not items:
                         break
-                    for item in items:
+                    for item in items[:MAX_CHANNELS - offset]:
                         channel = channel_from_api(item)
                         if channel is not None:
                             channels.append(channel)
-                    offset += len(items)
+                    offset += min(len(items), MAX_CHANNELS - offset)
                     total = data.get("TotalRecordCount")
                     if isinstance(total, int) and offset >= total:
                         break
                 channels.sort(key=lambda c: (parse_channel_number(c["number"]), c["name"].casefold()))
                 cls.channel_cache = {"fetched_at": now, "channels": channels, "available": bool(channels)}
-            except (requests.RequestException, RuntimeError, ValueError, TypeError, AttributeError) as exc:
+            except (requests.RequestException, RuntimeError, ValueError, TypeError, AttributeError, KeyError) as exc:
                 print(f"catalogue-api live TV channels unavailable: {exc}", flush=True)
                 # Keep any previous good list; otherwise remember the miss briefly.
                 cls.channel_cache = {
@@ -814,6 +832,8 @@ class CatalogueHandler(BaseHTTPRequestHandler):
                     "available": cache["available"],
                 }
             return cls.channel_cache
+        finally:
+            cls.channel_lock.release()
 
     def handle_channels(self, query):
         try:
@@ -862,7 +882,8 @@ class CatalogueHandler(BaseHTTPRequestHandler):
             return self.send_json(404, {"error": "logo not found"})
         channel_id, tag_file = suffix.split("/", 1)
         tag = tag_file[:-4]
-        if not channel_id or not tag or len(channel_id) > 128 or len(tag) > 256:
+        if (not re.fullmatch(r"[0-9A-Za-z-]{1,128}", channel_id)
+                or not re.fullmatch(r"[0-9A-Za-z._~-]{1,256}", tag)):
             return self.send_json(404, {"error": "logo not found"})
         # Only logos of channels Jellyfin actually listed (with the exact tag).
         known = {c["id"]: c["logoTag"] for c in self.channel_cache["channels"]}
@@ -874,7 +895,12 @@ class CatalogueHandler(BaseHTTPRequestHandler):
             body, content_type = self.jellyfin.fetch_poster(channel_id, tag, 240, 90, image_format="png")
         except requests.RequestException:
             return self.send_json(502, {"error": "logo upstream unavailable"})
-        return self.send_bytes(200, body, content_type)
+        # Never serve active image formats such as SVG/HTML from this public,
+        # same-origin endpoint, even if Jellyfin returns an unexpected MIME.
+        safe_type = content_type.split(";", 1)[0].strip().lower()
+        if safe_type not in {"image/png", "image/jpeg", "image/webp", "image/gif", "image/avif"}:
+            return self.send_json(502, {"error": "unsupported channel logo format"})
+        return self.send_bytes(200, body, safe_type)
 
     def handle_poster(self, path):
         suffix = path[len("/internal/poster/"):]
