@@ -103,28 +103,43 @@
         return `${dataBase}/backdrops/${plural}/${encodeURIComponent(item.id)}.jpg`;
     }
 
-    // Detail requests are cached briefly so hovering a card (prefetch) and then
-    // clicking it share one request.
+    // A short-lived cache shares hover and click requests. Never evict an
+    // in-flight request or let a failed, superseded request remove a newer one.
     const detailRequests = new Map();
     const DETAIL_REUSE_MS = 60000;
+    const MAX_DETAIL_CACHE = 60;
+    const MAX_HOVER_PREFETCH = 4;
+    let hoveringPrefetches = 0;
 
     function loadDetails(item) {
         if (!isApiMode()) return Promise.resolve(item);
         const key = String(item.id);
         const cached = detailRequests.get(key);
-        if (cached && Date.now() - cached.at < DETAIL_REUSE_MS) return cached.promise;
-        const promise = fetch(`/api/item/${encodeURIComponent(item.id)}`, { cache: 'no-store' })
+        if (cached && (cached.pending || Date.now() - cached.at < DETAIL_REUSE_MS)) {
+            return cached.promise;
+        }
+        const entry = { promise: null, pending: true, at: 0 };
+        entry.promise = fetch(`/api/item/${encodeURIComponent(item.id)}`, { cache: 'no-store' })
             .then(response => {
                 if (!response.ok) throw new Error(`detail request failed: ${response.status}`);
                 return response.json();
             })
-            .catch(error => {
-                detailRequests.delete(key);
+            .then(detail => {
+                entry.pending = false;
+                entry.at = Date.now(); // 60s from receipt, not from request start.
+                return detail;
+            }, error => {
+                if (detailRequests.get(key) === entry) detailRequests.delete(key);
                 throw error;
             });
-        detailRequests.set(key, { promise, at: Date.now() });
-        while (detailRequests.size > 60) detailRequests.delete(detailRequests.keys().next().value);
-        return promise;
+        detailRequests.delete(key);
+        detailRequests.set(key, entry);
+        while (detailRequests.size > MAX_DETAIL_CACHE) {
+            const settledKey = Array.from(detailRequests).find(([, value]) => !value.pending)?.[0];
+            if (settledKey === undefined) break;
+            detailRequests.delete(settledKey);
+        }
+        return entry.promise;
     }
 
     function safeTextPlaceholder(container, title, large = false) {
@@ -296,13 +311,25 @@
         mediaItem.append(posterContainer, info);
         mediaItem.addEventListener('click', activateCard);
         if (isApiMode()) {
-            // Start the detail request while the pointer rests on a card.
+            // Cap speculative upstream work: a fast sweep over many cards must
+            // not start dozens of simultaneous Jellyfin detail requests.
             let hoverTimer = null;
             mediaItem.addEventListener('pointerenter', event => {
                 if (event.pointerType !== 'mouse') return;
-                hoverTimer = setTimeout(() => loadDetails(item).catch(() => {}), 120);
+                clearTimeout(hoverTimer);
+                hoverTimer = setTimeout(() => {
+                    hoverTimer = null;
+                    if (!mediaItem.isConnected || hoveringPrefetches >= MAX_HOVER_PREFETCH) return;
+                    const entry = detailRequests.get(String(item.id));
+                    if (entry && (entry.pending || Date.now() - entry.at < DETAIL_REUSE_MS)) return;
+                    hoveringPrefetches += 1;
+                    loadDetails(item).catch(() => {}).finally(() => { hoveringPrefetches -= 1; });
+                }, 120);
             });
-            mediaItem.addEventListener('pointerleave', () => clearTimeout(hoverTimer));
+            mediaItem.addEventListener('pointerleave', () => {
+                clearTimeout(hoverTimer);
+                hoverTimer = null;
+            });
         }
         requestAnimationFrame(() => { mediaItem.style.opacity = '1'; });
         return mediaItem;
