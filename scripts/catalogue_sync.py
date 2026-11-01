@@ -440,7 +440,12 @@ def reconcile(client, connection, user_id, libraries, generation):
         str(row["id"]): (str(row["library_id"]), row["media_type"])
         for row in connection.execute("SELECT id,library_id,media_type FROM items")
     }
-    if existing and total_seen == 0:
+    ignored_libraries = deliberately_removed_library_ids(
+        get_meta(connection, "libraries_json", "[]"), libraries
+    )
+    if existing and total_seen == 0 and any(
+        library_id not in ignored_libraries for library_id, _ in existing.values()
+    ):
         raise RuntimeError("reconciliation safety guard: Jellyfin returned zero IDs for a non-empty catalogue")
 
     deleted = sorted(set(existing) - set(seen))
@@ -453,6 +458,7 @@ def reconcile(client, connection, user_id, libraries, generation):
 
     deletion_guard(
         connection, deleted, stage="reconciliation",
+        ignore_library_ids=ignored_libraries,
         active_library_ids=[lib["id"] for lib in libraries],
     )
 
@@ -464,6 +470,7 @@ def reconcile(client, connection, user_id, libraries, generation):
     connection.execute("BEGIN IMMEDIATE")
     try:
         removed = delete_items(connection, deleted)
+        persist_libraries(connection, libraries)
         prune_expired_caches(connection)
         set_meta(connection, "last_reconcile", int(time.time()))
         set_meta(connection, "last_reconcile_ids", total_seen)

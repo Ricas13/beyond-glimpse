@@ -130,6 +130,48 @@ class BootstrapStateTests(unittest.TestCase):
             finally:
                 db.close()
 
+    def test_direct_reconcile_respects_explicit_library_removal(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db = catalogue_sync.open_db(Path(directory) / "catalogue.db")
+            try:
+                catalogue_sync.set_meta(db, "libraries_json", json.dumps([
+                    {"id": "b", "name": "Kids", "media_type": "movie"}
+                ]))
+                db.execute(
+                    "INSERT INTO items(id,library_id,media_type,title,sort_title,generation) "
+                    "VALUES('b-1','b','movie','Film','film',1)"
+                )
+                db.commit()
+                with patch.dict(os.environ, {
+                    "JELLYFIN_EXCLUDE_LIBRARIES": "Kids",
+                    "RECONCILE_ALLOW_LIBRARY_REMOVAL": "",
+                }):
+                    removed = catalogue_sync.reconcile(object(), db, "user", [], 2)
+                self.assertEqual(removed, 1)
+                self.assertEqual(db.execute("SELECT COUNT(*) FROM items").fetchone()[0], 0)
+                self.assertEqual(json.loads(catalogue_sync.get_meta(db, "libraries_json")), [])
+            finally:
+                db.close()
+
+    def test_direct_reconcile_keeps_zero_inventory_guard_without_override(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db = catalogue_sync.open_db(Path(directory) / "catalogue.db")
+            try:
+                db.execute(
+                    "INSERT INTO items(id,library_id,media_type,title,sort_title,generation) "
+                    "VALUES('b-1','b','movie','Film','film',1)"
+                )
+                db.commit()
+                with patch.dict(os.environ, {
+                    "JELLYFIN_EXCLUDE_LIBRARIES": "",
+                    "RECONCILE_ALLOW_LIBRARY_REMOVAL": "",
+                }):
+                    with self.assertRaises(RuntimeError):
+                        catalogue_sync.reconcile(object(), db, "user", [], 2)
+                self.assertEqual(db.execute("SELECT COUNT(*) FROM items").fetchone()[0], 1)
+            finally:
+                db.close()
+
 
 class SchedulerTests(unittest.TestCase):
     def test_unconfigured_jellyfin_disables_scheduler(self):
