@@ -108,6 +108,79 @@ class PresentEpisodesOnlyTests(unittest.TestCase):
 
         self.assertEqual(service.present_season_ids(Client(), "u", ["flaky", "empty"]), {"flaky"})
 
+    def test_virtual_first_page_does_not_hide_a_real_later_episode(self):
+        calls = []
+        original = service.episode_from_api
+
+        class Client:
+            def get_json(self, path, params=None):
+                calls.append(params["StartIndex"])
+                if params["StartIndex"] == 0:
+                    return {"Items": [{"Id": f"v{i}", "LocationType": "Virtual"} for i in range(5)]}
+                return {"Items": [{"Id": "real", "LocationType": "FileSystem"}]}
+
+        try:
+            service.episode_from_api = lambda item: (
+                None if item.get("LocationType") == "Virtual" else original(item)
+            )
+            self.assertEqual(service.present_season_ids(Client(), "u", ["s"]), {"s"})
+        finally:
+            service.episode_from_api = original
+        self.assertEqual(calls, [0, 5])
+
+    def test_only_virtual_episodes_are_hidden_when_the_page_ends(self):
+        original = service.episode_from_api
+
+        class Client:
+            def get_json(self, path, params=None):
+                return {"Items": [{"Id": "v", "LocationType": "Virtual"}]}
+
+        try:
+            service.episode_from_api = lambda item: (
+                None if item.get("LocationType") == "Virtual" else original(item)
+            )
+            self.assertEqual(service.present_season_ids(Client(), "u", ["s"]), set())
+        finally:
+            service.episode_from_api = original
+
+    def test_bounded_unknown_probe_preserves_season(self):
+        calls = []
+        original = service.episode_from_api
+
+        class Client:
+            def get_json(self, path, params=None):
+                calls.append(params["StartIndex"])
+                return {"Items": [{"Id": f"v{i}", "LocationType": "Virtual"} for i in range(5)]}
+
+        try:
+            service.episode_from_api = lambda item: (
+                None if item.get("LocationType") == "Virtual" else original(item)
+            )
+            self.assertEqual(service.present_season_ids(Client(), "u", ["s"]), {"s"})
+        finally:
+            service.episode_from_api = original
+        self.assertEqual(calls, [0, 5, 10, 15])
+
+    def test_parallel_jellyfin_probes_use_worker_sessions(self):
+        original = service.JellyfinClient.get_json
+        session_ids = []
+
+        def recorder(self, path, params=None):
+            session_ids.append(id(self.session))
+            return {"Items": [{"Id": "real"}]}
+
+        service.JellyfinClient.get_json = recorder
+        caller = service.JellyfinClient("http://jf", "token")
+        try:
+            self.assertEqual(
+                len(service.present_season_ids(caller, "u", [f"s{i}" for i in range(20)])), 20
+            )
+            self.assertEqual(len(session_ids), 20)
+            self.assertNotIn(id(caller.session), session_ids)
+        finally:
+            service.JellyfinClient.get_json = original
+            caller.session.close()
+
     def test_probe_requests_are_small_and_do_not_scan_the_series(self):
         calls = []
 
