@@ -15,7 +15,7 @@ START_REPLACEMENT = """        // Initialize after the Beyond Glimpse runtime ha
         window.addEventListener('beyond-glimpse:ready', window.__startBeyondGlimpseMedia, { once: true });
         setTimeout(window.__startBeyondGlimpseMedia, 3000);"""
 
-SCRIPT_TAG = '    <script src="/large-library.js?v=6"></script>'
+SCRIPT_TAG = '    <script src="/large-library.js?v=7"></script>'
 OLD_SCRIPT_TAGS = (
     '    <script src="/large-library.js?v=1"></script>',
     '    <script src="/large-library.js?v=2"></script>',
@@ -23,11 +23,11 @@ OLD_SCRIPT_TAGS = (
     '    <script src="/large-library.js?v=4"></script>',
     '    <script src="/large-library.js?v=5"></script>',
 )
-LIBRARY_BROWSE_TAG = '    <script src="/library-browse.js?v=2"></script>'
+LIBRARY_BROWSE_TAG = '    <script src="/library-browse.js?v=3"></script>'
 TV_EPISODES_TAG = '    <script src="/tv-episodes.js?v=2"></script>'
 STARTUP_STATUS_TAG = '    <script src="/startup-status.js?v=3"></script>'
-JELLYFIN_UI_TAG = '    <script src="/jellyfin-ui.js?v=2"></script>'
-JELLYFIN_UI_CSS = '    <link rel="stylesheet" href="/jellyfin-ui.css?v=2">'
+JELLYFIN_UI_TAG = '    <script src="/jellyfin-ui.js?v=3"></script>'
+JELLYFIN_UI_CSS = '    <link rel="stylesheet" href="/jellyfin-ui.css?v=3">'
 OLD_STARTUP_TAGS = (
     '    <script src="/startup-status.js?v=1"></script>',
     '    <script src="/startup-status.js?v=2"></script>',
