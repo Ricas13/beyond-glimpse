@@ -12,18 +12,30 @@ import catalogue_service as service
 from catalogue_core import get_meta, open_db, set_meta
 
 
-EPISODE_VISIBILITY_POLICY = "present-only-v1"
+EPISODE_VISIBILITY_POLICY = "present-only-v2"
 
 
 def present_episode_from_api(item):
     """Return a public episode only when Jellyfin says it is actually present."""
-    if item.get("IsMissing") is True:
-        return None
-    if item.get("IsVirtualItem") is True:
-        return None
-    if str(item.get("LocationType") or "").strip().casefold() == "virtual":
+    if is_placeholder(item):
         return None
     return service._present_only_original_episode_from_api(item)
+
+
+def is_placeholder(item):
+    """True for metadata-only (missing/unaired/virtual) items."""
+    return (
+        item.get("IsMissing") is True
+        or item.get("IsVirtualItem") is True
+        or str(item.get("LocationType") or "").strip().casefold() == "virtual"
+    )
+
+
+def present_season_from_api(item):
+    """Hide placeholder seasons that Jellyfin generates for missing episodes."""
+    if is_placeholder(item):
+        return None
+    return service._present_only_original_season_from_api(item)
 
 
 def install_present_episode_policy():
@@ -33,6 +45,7 @@ def install_present_episode_policy():
 
     service._present_only_policy_installed = True
     service._present_only_original_episode_from_api = service.episode_from_api
+    service._present_only_original_season_from_api = service.season_from_api
     original_get_json = service.JellyfinClient.get_json
 
     def get_json_present_only(client, path, params=None):
@@ -42,14 +55,20 @@ def install_present_episode_policy():
             # IsMissing=false keeps the API response aligned with actual library
             # availability while preserving real STRM-backed episodes.
             effective["IsMissing"] = "false"
+        if path == "/Items" and effective.get("IncludeItemTypes") in ("Episode", "Season"):
+            # IsMissing does not cover unaired placeholders, and virtual seasons
+            # are generated too. Virtual items are never real media, so exclude
+            # them outright (STRM-backed items are not Virtual and stay visible).
+            effective["ExcludeLocationTypes"] = "Virtual"
         return original_get_json(client, path, params=effective)
 
     service.JellyfinClient.get_json = get_json_present_only
     service.episode_from_api = present_episode_from_api
+    service.season_from_api = present_season_from_api
 
 
 def invalidate_old_episode_cache_once():
-    """Drop pre-policy episode payloads once so placeholders cannot linger."""
+    """Drop pre-policy season/episode payloads once so placeholders cannot linger."""
     connection = open_db()
     try:
         service.ensure_tv_cache_schema(connection)
@@ -57,6 +76,7 @@ def invalidate_old_episode_cache_once():
         if current == EPISODE_VISIBILITY_POLICY:
             return False
         connection.execute("DELETE FROM season_episode_cache")
+        connection.execute("DELETE FROM series_season_cache")
         set_meta(connection, "episode_visibility_policy", EPISODE_VISIBILITY_POLICY)
         connection.commit()
         return True

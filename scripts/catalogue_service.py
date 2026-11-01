@@ -74,6 +74,36 @@ def episode_from_api(item):
     }
 
 
+def present_season_ids(client, user_id, series_id):
+    """Season IDs that contain at least one episode actually present.
+
+    Returns None when the answer is unknown (no episode carried a SeasonId), so
+    callers keep the unfiltered list rather than hiding everything.
+    """
+    data = client.get_json(
+        "/Items",
+        params={
+            "ParentId": series_id,
+            "Recursive": "true",
+            "IncludeItemTypes": "Episode",
+            "EnableTotalRecordCount": "false",
+            "EnableUserData": "false",
+            "EnableImages": "false",
+            "UserId": user_id,
+        },
+    )
+    ids, saw_season_id = set(), False
+    for item in data.get("Items") or []:
+        season_id = str(item.get("SeasonId") or "")
+        if not season_id:
+            continue
+        saw_season_id = True
+        # Looked up at call time so the present-only policy's filter applies.
+        if episode_from_api(item) is not None:
+            ids.add(season_id)
+    return ids if saw_season_id else None
+
+
 def season_sort_key(season):
     index_number = season.get("indexNumber")
     if index_number == 0:
@@ -485,6 +515,9 @@ class CatalogueHandler(BaseHTTPRequestHandler):
                 parsed = season_from_api(item)
                 if parsed is not None:
                     seasons.append(parsed)
+            present = present_season_ids(self.jellyfin, user_id, series_id)
+            if present is not None:
+                seasons = [season for season in seasons if season["id"] in present]
             seasons.sort(key=season_sort_key)
             payload = {"seriesId": series_id, "seasons": seasons}
             connection.execute(
