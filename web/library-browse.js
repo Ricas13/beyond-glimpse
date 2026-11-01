@@ -141,6 +141,15 @@
         document.head.appendChild(style);
     }
 
+    function announceState() {
+        window.dispatchEvent(new CustomEvent('bg:library-state'));
+    }
+
+    // Read-only view of the selection plus an entry point used by the
+    // Jellyfin-style navigation drawer (jellyfin-ui.js).
+    window.__beyondGlimpseLibraryState = { selected, libraryLists };
+    window.__beyondGlimpseSelectLibrary = (type, id, name) => selectLibrary(normalizeType(type), id || '', name || '');
+
     function closeMenus(exceptType = '') {
         for (const [type, control] of Object.entries(controls)) {
             if (type === exceptType) continue;
@@ -203,6 +212,7 @@
         selected[type] = id;
         updateControl(type, name);
         closeMenus();
+        announceState();
 
         const targetTab = tabType(type);
         const activeTab = document.querySelector('.tab.active')?.dataset.content;
@@ -228,6 +238,7 @@
             libraryLists[type] = [];
         }
         renderMenu(type);
+        announceState();
     }
 
     function decorate(type) {
@@ -270,6 +281,7 @@
             selected[type] = '';
             updateControl(type);
             closeMenus();
+            announceState();
         }, { capture: true });
     }
 

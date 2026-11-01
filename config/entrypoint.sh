@@ -530,6 +530,9 @@ apply_jellyfin_theme() {
     sed -i 's|href="images/favicon-16x16\.png"|href="images/jellyfin/favicon-16x16.png"|g' "$index_file"
     sed -i 's|href="../images/favicon-16x16\.png"|href="../images/jellyfin/favicon-16x16.png"|g' "$index_file"
 
+    # Enable the Jellyfin-style interface (web/jellyfin-ui.css is scoped to this class)
+    sed -i 's|<html lang="en">|<html lang="en" class="jf-ui">|' "$index_file"
+
     # Update title for main index files (primary server gets indicator too)
     if [[ "$index_file" == "/app/web/index.html" ]]; then
         # This is the main index, add Jellyfin indicator
