@@ -20,7 +20,7 @@
     let pageTitle = null;
     let liveAvailable = false;
     let livePanel = null;
-    const live = { open: false, query: '', offset: 0, hasMore: false, loading: false, total: 0, generation: 0, observer: null };
+    const live = { open: false, query: '', offset: 0, hasMore: false, loading: false, total: 0, generation: 0, observer: null, controller: null, progressTimer: null };
 
     function el(tag, className, text) {
         const node = document.createElement(tag);
@@ -207,7 +207,8 @@
         const logo = el('div', 'jf-channel-logo');
         const fallback = el('span', '', (channel.name || '?').trim().slice(0, 2).toUpperCase());
         logo.appendChild(fallback);
-        if (channel.logo) {
+        if (typeof channel.logo === 'string' &&
+            /^\/channel-logo\/[0-9A-Za-z-]+\/[0-9A-Za-z._~-]+\.png$/.test(channel.logo)) {
             const image = document.createElement('img');
             image.loading = 'lazy';
             image.alt = '';
@@ -277,14 +278,16 @@
     async function loadLivePage(generation) {
         if (live.loading || !live.hasMore || generation !== live.generation) return;
         live.loading = true;
+        const controller = new AbortController();
+        live.controller = controller;
         const { grid, count, empty } = livePanel._parts;
         try {
             const params = new URLSearchParams({ limit: String(PAGE), offset: String(live.offset) });
             if (live.query) params.set('q', live.query);
-            const response = await fetch(`/api/channels?${params}`, { cache: 'no-store' });
+            const response = await fetch(`/api/channels?${params}`, { cache: 'no-store', signal: controller.signal });
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
             const payload = await response.json();
-            if (generation !== live.generation) return;
+            if (generation !== live.generation || !live.open) return;
             const channels = Array.isArray(payload.channels) ? payload.channels : [];
             const fragment = document.createDocumentFragment();
             channels.forEach(channel => fragment.appendChild(channelCard(channel)));
@@ -296,16 +299,22 @@
             empty.hidden = live.total > 0;
             empty.textContent = live.query ? `No channels match “${live.query}”.` : 'No channels are available.';
         } catch (error) {
+            if (generation !== live.generation || !live.open || error.name === 'AbortError') return;
             console.warn('Could not load Live TV channels:', error);
             live.hasMore = false;
             empty.hidden = false;
             empty.textContent = 'Channels are temporarily unavailable.';
         } finally {
-            live.loading = false;
+            if (generation === live.generation) {
+                live.loading = false;
+                live.controller = null;
+            }
         }
     }
 
     function resetLive() {
+        if (live.controller) live.controller.abort();
+        live.controller = null;
         live.generation += 1;
         live.offset = 0;
         live.hasMore = true;
@@ -324,7 +333,7 @@
     }
 
     function openLive() {
-        if (!liveAvailable) return;
+        if (!liveAvailable || live.open) return;
         if (!livePanel) buildLivePanel();
         live.open = true;
         live.query = '';
@@ -339,12 +348,23 @@
             live.observer.observe(livePanel._parts.sentinel);
         }
         resetLive();
+        live.progressTimer = setInterval(refreshProgress, 30000);
         renderDrawer();
     }
 
     function closeLive() {
         if (!live.open) return;
         live.open = false;
+        live.generation += 1;
+        if (live.controller) live.controller.abort();
+        live.controller = null;
+        live.loading = false;
+        if (live.observer) {
+            live.observer.disconnect();
+            live.observer = null;
+        }
+        clearInterval(live.progressTimer);
+        live.progressTimer = null;
         livePanel.hidden = true;
         document.documentElement.classList.remove('jf-live-open');
         document.querySelectorAll('.jf-livetab').forEach(node => node.classList.remove('active'));
@@ -355,15 +375,15 @@
         // Header tab (mid-width screens) and mobile-menu entry; the drawer has its own.
         const headerTabs = document.querySelector('.header .tabs');
         if (headerTabs) {
-            const tab = el('div', 'jf-livetab', 'Live TV');
-            tab.setAttribute('role', 'button');
+            const tab = el('button', 'jf-livetab', 'Live TV');
+            tab.type = 'button';
             tab.addEventListener('click', openLive);
             headerTabs.insertBefore(tab, headerTabs.querySelector('.sort-toggle'));
         }
         const mobileTabs = document.querySelector('.mobile-menu .tabs');
         if (mobileTabs) {
-            const tab = el('div', 'jf-livetab', 'Live TV');
-            tab.setAttribute('role', 'button');
+            const tab = el('button', 'jf-livetab', 'Live TV');
+            tab.type = 'button';
             tab.addEventListener('click', () => {
                 openLive();
                 document.querySelector('.mobile-menu')?.classList.remove('open');
@@ -375,13 +395,18 @@
     async function probeLive() {
         try {
             const response = await fetch('/api/channels?limit=1', { cache: 'no-store' });
-            if (!response.ok) return;
-            const payload = await response.json();
-            liveAvailable = Boolean(payload.available) && Number(payload.total || 0) > 0;
-        } catch (_) { return; }
-        if (!liveAvailable) return;
-        document.documentElement.classList.add('jf-live-available');
-        renderDrawer();
+            if (response.ok) {
+                const payload = await response.json();
+                liveAvailable = Boolean(payload.available) && Number(payload.total || 0) > 0;
+            }
+        } catch (_) { /* Jellyfin or catalogue API may still be starting */ }
+        if (liveAvailable) {
+            document.documentElement.classList.add('jf-live-available');
+            renderDrawer();
+        } else {
+            // A concurrent cold-cache refresh may initially return an empty list.
+            setTimeout(probeLive, 60000);
+        }
     }
 
     function init() {
@@ -399,8 +424,6 @@
         document.addEventListener('keydown', event => {
             if (event.key === 'Escape' && live.open && !document.querySelector('.modal-overlay.active')) closeLive();
         });
-        setInterval(refreshProgress, 30000);
-
         window.addEventListener('bg:library-state', renderDrawer);
         const tabs = document.querySelector('.header .tabs');
         if (tabs) {
