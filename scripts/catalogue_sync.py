@@ -127,13 +127,28 @@ def deletion_guard(connection, removed_ids, *, stage, ignore_library_ids=(), act
     limit = float(os.environ.get("RECONCILE_MAX_DELETE_FRACTION", "0.35"))
     if not 0 <= limit <= 1:
         raise ValueError("RECONCILE_MAX_DELETE_FRACTION must be between 0 and 1")
-    if len(removed) / len(existing) > limit:
-        raise RuntimeError(f"{stage}: refusing suspicious deletion of {len(removed)}/{len(existing)} items")
-    counts, removed_counts = {}, {}
+    counts = {}
     for row in existing:
         library_id = row["library_id"]
         counts[library_id] = counts.get(library_id, 0) + 1
-        if row["id"] in removed:
+    # Small *eligible* libraries are exempt from both percentage checks.
+    # Vanished libraries, however small, remain guarded against partial listings.
+    guarded = [
+        row for row in existing
+        if active is None or row["library_id"] not in active
+        or counts[row["library_id"]] >= MIN_GUARDED_LIBRARY_SIZE
+    ]
+    if not guarded:
+        return
+    guarded_removed = removed & {row["id"] for row in guarded}
+    if len(guarded_removed) / len(guarded) > limit:
+        raise RuntimeError(
+            f"{stage}: refusing suspicious deletion of {len(guarded_removed)}/{len(guarded)} guarded items"
+        )
+    removed_counts = {}
+    for row in guarded:
+        if row["id"] in guarded_removed:
+            library_id = row["library_id"]
             removed_counts[library_id] = removed_counts.get(library_id, 0) + 1
     for library_id, count in counts.items():
         if active is not None and library_id in active and count < MIN_GUARDED_LIBRARY_SIZE:
@@ -211,7 +226,8 @@ def bootstrap(client, connection, *, reason="initial bootstrap"):
     ignored_libraries = deliberately_removed_library_ids(
         get_meta(connection, "libraries_json", "[]"), libraries
     )
-    persist_libraries(connection, libraries)
+    # Retain the last known library IDs/names until the guarded bootstrap
+    # succeeds; a failed partial listing must not erase exclusion-by-name data.
     connection.commit()
     fts_enabled = get_meta(connection, "fts_enabled", "0") == "1"
 
@@ -286,6 +302,7 @@ def bootstrap(client, connection, *, reason="initial bootstrap"):
     connection.execute("BEGIN IMMEDIATE")
     try:
         removed = delete_items(connection, stale_ids)
+        persist_libraries(connection, libraries)
         set_meta(connection, "bootstrap_complete", "1")
         set_meta(connection, "watermark", sync_server_time)
         set_meta(connection, "last_reconcile", int(time.time()))
