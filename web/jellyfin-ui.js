@@ -160,10 +160,13 @@
             const response = await fetch('/api/status', { cache: 'no-store', signal: controller.signal });
             if (response.ok) {
                 const status = await response.json();
+                let librariesLoaded = true;
                 if (typeof window.__beyondGlimpseReloadLibraries === 'function') {
-                    await window.__beyondGlimpseReloadLibraries();
+                    const results = await window.__beyondGlimpseReloadLibraries();
+                    librariesLoaded = Array.isArray(results) && results.every(Boolean);
                 }
-                settled = Boolean(status.bootstrapComplete) && status.state !== 'bootstrap';
+                // Do not permanently stop after a failed final library request.
+                settled = Boolean(status.bootstrapComplete) && status.state !== 'bootstrap' && librariesLoaded;
             }
         } catch (_) { /* the API may still be starting; retry later */ }
         finally { clearTimeout(deadline); }
