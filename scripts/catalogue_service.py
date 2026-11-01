@@ -308,7 +308,7 @@ class CatalogueHandler(BaseHTTPRequestHandler):
                 # counts from whatever has been indexed so far.
                 try:
                     libraries = self.cached_libraries()
-                except (requests.RequestException, RuntimeError, ValueError, TypeError, KeyError) as exc:
+                except Exception as exc:
                     # Live discovery is a best-effort first-run fallback, never a
                     # prerequisite for serving the existing local catalogue.
                     print(f"catalogue-api library list unavailable: {exc}", flush=True)
