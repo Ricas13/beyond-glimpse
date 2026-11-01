@@ -22,10 +22,20 @@
     let livePanel = null;
     const live = { open: false, query: '', offset: 0, hasMore: false, loading: false, total: 0, generation: 0, observer: null, controller: null, progressTimer: null, searchTimer: null };
 
-    // Alphabetical, ignoring leading punctuation ("__Movies" sorts as "Movies").
+    // Libraries are ordered by how their names are prefixed: libraries with no
+    // leading "_" come first, then "_" libraries, then "__" libraries (each extra
+    // underscore pushes a library lower). Within a group the order is alphabetical,
+    // ignoring the prefix and comparing numbers naturally.
     const nameCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
     const sortableName = name => String(name || '').replace(/^[^\p{L}\p{N}]+/u, '');
+    const underscoreRank = name => {
+        const match = /^_+/.exec(String(name || ''));
+        return match ? match[0].length : 0;
+    };
     function compareLibraries(a, b) {
+        const rankA = underscoreRank(a.name);
+        const rankB = underscoreRank(b.name);
+        if (rankA !== rankB) return rankA < rankB ? -1 : 1;
         return nameCollator.compare(sortableName(a.name), sortableName(b.name)) ||
             nameCollator.compare(String(a.name || ''), String(b.name || ''));
     }
@@ -644,6 +654,12 @@
 
         // Picking any library/tab leaves Live TV; Escape closes it too.
         document.addEventListener('click', event => {
+            // The details view floats over the grid with the drawer still clickable;
+            // any navigation must close it, or the change happens out of sight.
+            if (event.target.closest('.header .tab, .mobile-menu .tab, .jf-livetab, .jf-nav-item, .jf-mlib') &&
+                document.querySelector('.modal-overlay.active') && typeof closeModal === 'function') {
+                closeModal();
+            }
             if (!live.open) return;
             if (event.target.closest('.header .tab, .mobile-menu .tab, .jf-nav-item:not([data-nav="live"])')) closeLive();
         }, true);

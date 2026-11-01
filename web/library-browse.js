@@ -11,11 +11,20 @@
     const libraryLists = { movie: [], tvshow: [] };
     const controls = {};
 
-    // Alphabetical by name, ignoring leading punctuation such as the "_" prefixes
-    // people use to force an order inside Jellyfin, with numbers compared naturally.
+    // Libraries are ordered by how their names are prefixed: libraries with no
+    // leading "_" come first, then "_" libraries, then "__" libraries (each extra
+    // underscore pushes a library lower). Within a group the order is alphabetical,
+    // ignoring the prefix and comparing numbers naturally.
     const nameCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
     const sortableName = name => String(name || '').replace(/^[^\p{L}\p{N}]+/u, '');
+    const underscoreRank = name => {
+        const match = /^_+/.exec(String(name || ''));
+        return match ? match[0].length : 0;
+    };
     function compareLibraries(a, b) {
+        const rankA = underscoreRank(a.name);
+        const rankB = underscoreRank(b.name);
+        if (rankA !== rankB) return rankA < rankB ? -1 : 1;
         return nameCollator.compare(sortableName(a.name), sortableName(b.name)) ||
             nameCollator.compare(String(a.name || ''), String(b.name || ''));
     }

@@ -1,4 +1,6 @@
+import json
 import re
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -49,7 +51,7 @@ class JellyfinUiAssetTests(unittest.TestCase):
 
     def test_service_worker_precaches_the_assets(self):
         sw = (ROOT / "web" / "sw.js").read_text(encoding="utf-8")
-        self.assertIn("/jellyfin-ui.js?v=4", sw)
+        self.assertIn("/jellyfin-ui.js?v=6", sw)
         self.assertIn("/jellyfin-ui.css?v=4", sw)
 
     def test_sort_query_honours_the_selected_direction(self):
@@ -60,11 +62,37 @@ class JellyfinUiAssetTests(unittest.TestCase):
         css = (ROOT / "web" / "jellyfin-ui.css").read_text(encoding="utf-8")
         self.assertIn("html.jf-ui .roulette-button { display: none !important; }", css)
 
-    def test_libraries_are_sorted_ignoring_leading_punctuation(self):
-        for name in ("jellyfin-ui.js", "library-browse.js"):
-            source = (ROOT / "web" / name).read_text(encoding="utf-8")
-            self.assertIn("numeric: true", source, name)
-            self.assertIn("p{L}", source, name)
+    def test_library_order_prefixes_and_natural_sort_in_both_interfaces(self):
+        names = [
+            "In Cinemas", "__TV - DE", "_Movies 10", "_Movies 2",
+            "__Movies - DE", "_Movies", "日本語", "_école", "___",
+            "_", "__", "_Movies"
+        ]
+        expected = [
+            "_", "_école", "_Movies", "_Movies", "_Movies 2", "_Movies 10",
+            "__", "__Movies - DE", "__TV - DE", "___"
+        ]
+        # Run the real comparator code in Node, not a Python approximation.
+        for filename, boundary in (("jellyfin-ui.js", "function el("),
+                                   ("library-browse.js", "function normalizeType(")):
+            source = (ROOT / "web" / filename).read_text(encoding="utf-8")
+            snippet = source.split("    const nameCollator =", 1)[1].split(boundary, 1)[0]
+            code = "const nameCollator =" + snippet + (
+                "\nconst input = " + json.dumps([
+                    {"name": name, "id": str(index)} for index, name in enumerate(names)
+                ]) + ";\nprocess.stdout.write(JSON.stringify(input.sort(compareLibraries)));"
+            )
+            output = subprocess.run(["node", "-e", code], capture_output=True,
+                                    text=True, check=True).stdout
+            ordered = json.loads(output)
+            # Unprefixed libraries come first (in either order), then "_" libraries,
+            # then "__" and deeper, as requested for the drawer.
+            self.assertCountEqual([item["name"] for item in ordered[:2]],
+                                  ["In Cinemas", "日本語"], filename)
+            self.assertEqual([item["name"] for item in ordered[2:]], expected, filename)
+            # Two identically named libraries retain their original stable order.
+            self.assertEqual([item["id"] for item in ordered
+                              if item["name"] == "_Movies"], ["5", "11"], filename)
 
     def test_trailer_feature_is_removed(self):
         html = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
