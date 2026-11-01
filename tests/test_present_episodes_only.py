@@ -89,58 +89,122 @@ class PresentEpisodesOnlyTests(unittest.TestCase):
     def test_seasons_without_present_episodes_are_dropped(self):
         class Client:
             def get_json(self, path, params=None):
-                return {"Items": [
-                    {"Id": "e1", "SeasonId": "s1"},
-                    {"Id": "e2", "SeasonId": "s1"},
-                    {"Id": "e3", "SeasonId": "s3"},
-                ], "TotalRecordCount": 3}
-
-        self.assertEqual(service.present_season_ids(Client(), "u", "series"), {"s1", "s3"})
-
-    def test_unknown_season_membership_does_not_hide_everything(self):
-        class Client:
-            def get_json(self, path, params=None):
+                if params["ParentId"] == "empty":
+                    return {"Items": []}
                 return {"Items": [{"Id": "e1"}]}
 
-        self.assertIsNone(service.present_season_ids(Client(), "u", "series"))
+        self.assertEqual(
+            service.present_season_ids(Client(), "u", ["s1", "empty", "s3"]), {"s1", "s3"}
+        )
 
-    def test_no_episodes_means_no_visible_seasons(self):
+    def test_failed_probe_keeps_the_season_visible(self):
+        import requests
+
         class Client:
             def get_json(self, path, params=None):
-                return {"Items": [], "TotalRecordCount": 0}
+                if params["ParentId"] == "flaky":
+                    raise requests.ConnectionError("boom")
+                return {"Items": []}
 
-        self.assertEqual(service.present_season_ids(Client(), "u", "series"), set())
+        self.assertEqual(service.present_season_ids(Client(), "u", ["flaky", "empty"]), {"flaky"})
 
-    def test_partial_membership_does_not_drop_valid_seasons(self):
-        class Client:
-            def get_json(self, path, params=None):
-                return {"Items": [
-                    {"Id": "e1", "SeasonId": "s1"},
-                    {"Id": "e2"},
-                ], "TotalRecordCount": 2}
-
-        self.assertIsNone(service.present_season_ids(Client(), "u", "series"))
-
-    def test_episode_membership_pages_through_server_capped_results(self):
-        episode_list = [
-            {"Id": f"e{index}", "SeasonId": "s1" if index < 1000 else "s2"}
-            for index in range(1001)
-        ]
+    def test_virtual_first_page_does_not_hide_a_real_later_episode(self):
         calls = []
+        original = service.episode_from_api
 
         class Client:
             def get_json(self, path, params=None):
                 calls.append(params["StartIndex"])
-                start = params["StartIndex"]
-                # Simulate server-side pagination even with a requested Limit.
-                return {"Items": episode_list[start:start + 500],
-                        "TotalRecordCount": len(episode_list)}
+                if params["StartIndex"] == 0:
+                    return {"Items": [{"Id": f"v{i}", "LocationType": "Virtual"} for i in range(5)]}
+                return {"Items": [{"Id": "real", "LocationType": "FileSystem"}]}
 
-        self.assertEqual(
-            service.present_season_ids(Client(), "u", "series"),
-            {"s1", "s2"},
-        )
-        self.assertEqual(calls, [0, 500, 1000])
+        try:
+            service.episode_from_api = lambda item: (
+                None if item.get("LocationType") == "Virtual" else original(item)
+            )
+            self.assertEqual(service.present_season_ids(Client(), "u", ["s"]), {"s"})
+        finally:
+            service.episode_from_api = original
+        self.assertEqual(calls, [0, 5])
+
+    def test_only_virtual_episodes_are_hidden_when_the_page_ends(self):
+        original = service.episode_from_api
+
+        class Client:
+            def get_json(self, path, params=None):
+                if params["StartIndex"] > 0:
+                    return {"Items": []}
+                return {"Items": [{"Id": "v", "LocationType": "Virtual"}]}
+
+        try:
+            service.episode_from_api = lambda item: (
+                None if item.get("LocationType") == "Virtual" else original(item)
+            )
+            self.assertEqual(service.present_season_ids(Client(), "u", ["s"]), set())
+        finally:
+            service.episode_from_api = original
+
+    def test_bounded_unknown_probe_preserves_season(self):
+        calls = []
+        original = service.episode_from_api
+
+        class Client:
+            def get_json(self, path, params=None):
+                calls.append(params["StartIndex"])
+                return {"Items": [{"Id": f"v{i}", "LocationType": "Virtual"} for i in range(5)]}
+
+        try:
+            service.episode_from_api = lambda item: (
+                None if item.get("LocationType") == "Virtual" else original(item)
+            )
+            self.assertEqual(service.present_season_ids(Client(), "u", ["s"]), {"s"})
+        finally:
+            service.episode_from_api = original
+        self.assertEqual(calls, [0, 5, 10, 15])
+
+    def test_parallel_jellyfin_probes_use_worker_sessions(self):
+        original = service.JellyfinClient.get_json
+        session_ids = []
+
+        def recorder(self, path, params=None):
+            session_ids.append(id(self.session))
+            return {"Items": [{"Id": "real"}]}
+
+        service.JellyfinClient.get_json = recorder
+        caller = service.JellyfinClient("http://jf", "token")
+        try:
+            self.assertEqual(
+                len(service.present_season_ids(caller, "u", [f"s{i}" for i in range(20)])), 20
+            )
+            self.assertEqual(len(session_ids), 20)
+            self.assertNotIn(id(caller.session), session_ids)
+        finally:
+            service.JellyfinClient.get_json = original
+            caller.session.close()
+
+    def test_probe_requests_are_small_and_do_not_scan_the_series(self):
+        calls = []
+
+        class Client:
+            def get_json(self, path, params=None):
+                calls.append(dict(params))
+                return {"Items": [{"Id": "e"}]}
+
+        service.present_season_ids(Client(), "u", [f"s{i}" for i in range(20)])
+        self.assertEqual(len(calls), 20)
+        for params in calls:
+            self.assertEqual(params["Limit"], 5)
+            self.assertEqual(params["Recursive"], "false")
+            self.assertEqual(params["EnableTotalRecordCount"], "false")
+            self.assertTrue(params["ParentId"].startswith("s"))
+
+    def test_no_seasons_means_no_probes(self):
+        class Client:
+            def get_json(self, path, params=None):
+                raise AssertionError("must not be called")
+
+        self.assertEqual(service.present_season_ids(Client(), "u", []), set())
 
     def test_old_episode_cache_is_invalidated_once(self):
         with tempfile.TemporaryDirectory() as tmp:

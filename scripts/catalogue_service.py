@@ -4,6 +4,7 @@ import json
 import os
 import time
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlparse
 
@@ -74,50 +75,84 @@ def episode_from_api(item):
     }
 
 
-def present_season_ids(client, user_id, series_id):
-    """Season IDs containing at least one present episode.
+def present_season_ids(client, user_id, season_ids, workers=8):
+    """Which of ``season_ids`` hold at least one present episode.
 
-    Return None if a present episode has no SeasonId: membership is unknown,
-    so do not hide a valid season. An empty response means no present seasons.
-    Page explicitly because Jellyfin may cap /Items results below our Limit.
+    Each season gets a tiny parallel probe (a handful of rows) instead of
+    paging through every episode of the series, so the cost no longer grows
+    with show length. A failed probe keeps the season visible rather than
+    hiding something that may be real.
     """
-    ids = set()
-    offset = 0
-    page_size = 1000
-    while True:
-        data = client.get_json(
-            "/Items",
-            params={
-                "ParentId": series_id,
-                "Recursive": "true",
-                "IncludeItemTypes": "Episode",
-                "StartIndex": offset,
-                "Limit": page_size,
-                "EnableTotalRecordCount": "true",
-                "EnableUserData": "false",
-                "EnableImages": "false",
-                "UserId": user_id,
-            },
-        )
-        items = data.get("Items") or []
-        if not items:
-            return ids
-        for item in items:
-            # Looked up at call time so the present-only policy's filter applies.
-            if episode_from_api(item) is None:
-                continue
-            season_id = str(item.get("SeasonId") or "")
-            if not season_id:
-                return None
-            ids.add(season_id)
-        offset += len(items)
-        total = data.get("TotalRecordCount")
-        if total is not None:
+    ids = list(season_ids)
+    if not ids:
+        return set()
+
+    # requests.Session is not guaranteed thread-safe. Each pool thread gets its
+    # own JellyfinClient/session; the present-only get_json wrapper still applies.
+    # Lightweight fake clients in the unit tests can be passed through unchanged.
+    worker_local = threading.local()
+    worker_clients = []
+    worker_clients_lock = threading.Lock()
+
+    def probe_client():
+        if not isinstance(client, JellyfinClient):
+            return client
+        local = getattr(worker_local, "client", None)
+        if local is None:
+            local = JellyfinClient(url=client.url, token=client.token, timeout=client.timeout)
+            worker_local.client = local
+            with worker_clients_lock:
+                worker_clients.append(local)
+        return local
+
+    def probe(season_id):
+        local = probe_client()
+        offset = 0
+        # With an older Jellyfin build, ExcludeLocationTypes can be ignored.
+        # Check further small pages when the first five are only placeholders.
+        # After four full pages we cannot prove absence: keep the season rather
+        # than incorrectly hiding real episodes beyond this bounded scan.
+        for _ in range(4):
             try:
-                if offset >= int(total):
-                    return ids
-            except (TypeError, ValueError):
-                pass
+                data = local.get_json(
+                    "/Items",
+                    params={
+                        "ParentId": season_id,
+                        "Recursive": "false",
+                        "IncludeItemTypes": "Episode",
+                        "StartIndex": offset,
+                        "Limit": 5,
+                        "EnableTotalRecordCount": "false",
+                        "EnableUserData": "false",
+                        "EnableImages": "false",
+                        "UserId": user_id,
+                    },
+                )
+                if not isinstance(data, dict) or not isinstance(data.get("Items"), list):
+                    return season_id, True
+                items = data["Items"]
+                # Looked up at call time so the present-only filter applies.
+                if any(episode_from_api(item) is not None for item in items):
+                    return season_id, True
+            except (requests.RequestException, ValueError, TypeError, KeyError, AttributeError):
+                # An invalid season id or a failed/malformed response is unknown,
+                # not evidence that the season has no available episodes.
+                return season_id, True
+            if not items:
+                return season_id, False
+            # A Jellyfin server may cap pages below the requested Limit.
+            # Keep looking from the returned row count rather than assuming a
+            # short page means the end of the season.
+            offset += len(items)
+        return season_id, True
+
+    try:
+        with ThreadPoolExecutor(max_workers=max(1, min(8, workers, len(ids)))) as pool:
+            return {season_id for season_id, present in pool.map(probe, ids) if present}
+    finally:
+        for local in worker_clients:
+            local.session.close()
+
 
 def season_sort_key(season):
     index_number = season.get("indexNumber")
@@ -548,9 +583,8 @@ class CatalogueHandler(BaseHTTPRequestHandler):
                 parsed = season_from_api(item)
                 if parsed is not None:
                     seasons.append(parsed)
-            present = present_season_ids(self.jellyfin, user_id, series_id)
-            if present is not None:
-                seasons = [season for season in seasons if season["id"] in present]
+            present = present_season_ids(self.jellyfin, user_id, [season["id"] for season in seasons])
+            seasons = [season for season in seasons if season["id"] in present]
             seasons.sort(key=season_sort_key)
             payload = {"seriesId": series_id, "seasons": seasons}
             connection.execute(
