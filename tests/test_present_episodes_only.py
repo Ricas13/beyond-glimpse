@@ -89,58 +89,47 @@ class PresentEpisodesOnlyTests(unittest.TestCase):
     def test_seasons_without_present_episodes_are_dropped(self):
         class Client:
             def get_json(self, path, params=None):
-                return {"Items": [
-                    {"Id": "e1", "SeasonId": "s1"},
-                    {"Id": "e2", "SeasonId": "s1"},
-                    {"Id": "e3", "SeasonId": "s3"},
-                ], "TotalRecordCount": 3}
-
-        self.assertEqual(service.present_season_ids(Client(), "u", "series"), {"s1", "s3"})
-
-    def test_unknown_season_membership_does_not_hide_everything(self):
-        class Client:
-            def get_json(self, path, params=None):
+                if params["ParentId"] == "empty":
+                    return {"Items": []}
                 return {"Items": [{"Id": "e1"}]}
 
-        self.assertIsNone(service.present_season_ids(Client(), "u", "series"))
+        self.assertEqual(
+            service.present_season_ids(Client(), "u", ["s1", "empty", "s3"]), {"s1", "s3"}
+        )
 
-    def test_no_episodes_means_no_visible_seasons(self):
+    def test_failed_probe_keeps_the_season_visible(self):
+        import requests
+
         class Client:
             def get_json(self, path, params=None):
-                return {"Items": [], "TotalRecordCount": 0}
+                if params["ParentId"] == "flaky":
+                    raise requests.ConnectionError("boom")
+                return {"Items": []}
 
-        self.assertEqual(service.present_season_ids(Client(), "u", "series"), set())
+        self.assertEqual(service.present_season_ids(Client(), "u", ["flaky", "empty"]), {"flaky"})
 
-    def test_partial_membership_does_not_drop_valid_seasons(self):
-        class Client:
-            def get_json(self, path, params=None):
-                return {"Items": [
-                    {"Id": "e1", "SeasonId": "s1"},
-                    {"Id": "e2"},
-                ], "TotalRecordCount": 2}
-
-        self.assertIsNone(service.present_season_ids(Client(), "u", "series"))
-
-    def test_episode_membership_pages_through_server_capped_results(self):
-        episode_list = [
-            {"Id": f"e{index}", "SeasonId": "s1" if index < 1000 else "s2"}
-            for index in range(1001)
-        ]
+    def test_probe_requests_are_small_and_do_not_scan_the_series(self):
         calls = []
 
         class Client:
             def get_json(self, path, params=None):
-                calls.append(params["StartIndex"])
-                start = params["StartIndex"]
-                # Simulate server-side pagination even with a requested Limit.
-                return {"Items": episode_list[start:start + 500],
-                        "TotalRecordCount": len(episode_list)}
+                calls.append(dict(params))
+                return {"Items": [{"Id": "e"}]}
 
-        self.assertEqual(
-            service.present_season_ids(Client(), "u", "series"),
-            {"s1", "s2"},
-        )
-        self.assertEqual(calls, [0, 500, 1000])
+        service.present_season_ids(Client(), "u", [f"s{i}" for i in range(20)])
+        self.assertEqual(len(calls), 20)
+        for params in calls:
+            self.assertEqual(params["Limit"], 5)
+            self.assertEqual(params["Recursive"], "false")
+            self.assertEqual(params["EnableTotalRecordCount"], "false")
+            self.assertTrue(params["ParentId"].startswith("s"))
+
+    def test_no_seasons_means_no_probes(self):
+        class Client:
+            def get_json(self, path, params=None):
+                raise AssertionError("must not be called")
+
+        self.assertEqual(service.present_season_ids(Client(), "u", []), set())
 
     def test_old_episode_cache_is_invalidated_once(self):
         with tempfile.TemporaryDirectory() as tmp:

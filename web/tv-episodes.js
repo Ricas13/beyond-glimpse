@@ -36,6 +36,11 @@
                 gap: 12px;
                 margin-bottom: 12px;
             }
+            .bg-episode-count {
+                font-size: .85rem;
+                color: var(--muted-text, #aaa);
+                white-space: nowrap;
+            }
             .bg-episode-title {
                 font-size: 1.08rem;
                 font-weight: 700;
@@ -143,8 +148,10 @@
         heading.className = 'bg-episode-heading';
         const title = document.createElement('div');
         title.className = 'bg-episode-title';
-        title.textContent = 'Episodes';
-        heading.appendChild(title);
+        title.textContent = 'Episodes Available';
+        const count = document.createElement('div');
+        count.className = 'bg-episode-count';
+        heading.append(title, count);
 
         const tabs = document.createElement('div');
         tabs.className = 'bg-season-tabs';
@@ -200,6 +207,30 @@
         }
         boundPromiseCache(seasonPromises, MAX_CACHED_SERIES);
         return seasonPromises.get(seriesId);
+    }
+
+    function initialSeason(seasons) {
+        return seasons.find(season => Number(season.indexNumber) === 1) ||
+            seasons.find(season => Number(season.indexNumber) > 0) ||
+            seasons[0];
+    }
+
+    // Start fetching seasons and the first season's episodes as soon as the poster
+    // is clicked, in parallel with the details request, instead of waiting for it.
+    function prefetchSeries(seriesId) {
+        loadSeasons(seriesId)
+            .then(payload => {
+                const seasons = Array.isArray(payload.seasons) ? payload.seasons : [];
+                const initial = initialSeason(seasons);
+                if (initial) loadEpisodes(seriesId, initial.id).catch(() => {});
+            })
+            .catch(() => {});
+    }
+
+    function setEpisodeCount(count) {
+        const node = document.querySelector('.modal-body .bg-episode-count');
+        if (!node) return;
+        node.textContent = count == null ? '' : `${count} ${count === 1 ? 'episode' : 'episodes'}`;
     }
 
     function loadEpisodes(seriesId, seasonId) {
@@ -290,11 +321,14 @@
             button.classList.toggle('active', button.dataset.seasonId === season.id);
             button.setAttribute('aria-selected', button.dataset.seasonId === season.id ? 'true' : 'false');
         }
+        setEpisodeCount(null);
         status(content, `Loading ${season.name || 'season'}…`);
         try {
             const payload = await loadEpisodes(seriesId, season.id);
             if (generation !== modalGeneration || selectionGeneration !== seasonSelectionGeneration) return;
-            renderEpisodes(content, Array.isArray(payload.episodes) ? payload.episodes : []);
+            const episodes = Array.isArray(payload.episodes) ? payload.episodes : [];
+            renderEpisodes(content, episodes);
+            setEpisodeCount(episodes.length);
         } catch (error) {
             if (generation !== modalGeneration || selectionGeneration !== seasonSelectionGeneration) return;
             console.warn('Could not load TV episodes:', error);
@@ -332,9 +366,7 @@
                 tabs.appendChild(button);
             }
 
-            const initial = seasons.find(season => Number(season.indexNumber) === 1) ||
-                seasons.find(season => Number(season.indexNumber) > 0) ||
-                seasons[0];
+            const initial = initialSeason(seasons);
             await selectSeason(seriesId, initial, tabs, content, generation);
         } catch (error) {
             if (generation !== modalGeneration) return;
@@ -345,6 +377,7 @@
 
     openModal = async function beyondGlimpseOpenModalWithEpisodes(item, type) {
         const generation = ++modalGeneration;
+        if (type === 'tvshows' && item && item.id) prefetchSeries(String(item.id));
         await originalOpenModal(item, type);
         if (generation !== modalGeneration) return;
         if (type !== 'tvshows' || !item || !item.id) {

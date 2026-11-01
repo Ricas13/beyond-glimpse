@@ -4,6 +4,7 @@ import json
 import os
 import time
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlparse
 
@@ -74,50 +75,41 @@ def episode_from_api(item):
     }
 
 
-def present_season_ids(client, user_id, series_id):
-    """Season IDs containing at least one present episode.
+def present_season_ids(client, user_id, season_ids, workers=8):
+    """Which of ``season_ids`` hold at least one present episode.
 
-    Return None if a present episode has no SeasonId: membership is unknown,
-    so do not hide a valid season. An empty response means no present seasons.
-    Page explicitly because Jellyfin may cap /Items results below our Limit.
+    Each season gets a tiny parallel probe (a handful of rows) instead of
+    paging through every episode of the series, so the cost no longer grows
+    with show length. A failed probe keeps the season visible rather than
+    hiding something that may be real.
     """
-    ids = set()
-    offset = 0
-    page_size = 1000
-    while True:
-        data = client.get_json(
-            "/Items",
-            params={
-                "ParentId": series_id,
-                "Recursive": "true",
-                "IncludeItemTypes": "Episode",
-                "StartIndex": offset,
-                "Limit": page_size,
-                "EnableTotalRecordCount": "true",
-                "EnableUserData": "false",
-                "EnableImages": "false",
-                "UserId": user_id,
-            },
-        )
-        items = data.get("Items") or []
-        if not items:
-            return ids
-        for item in items:
-            # Looked up at call time so the present-only policy's filter applies.
-            if episode_from_api(item) is None:
-                continue
-            season_id = str(item.get("SeasonId") or "")
-            if not season_id:
-                return None
-            ids.add(season_id)
-        offset += len(items)
-        total = data.get("TotalRecordCount")
-        if total is not None:
-            try:
-                if offset >= int(total):
-                    return ids
-            except (TypeError, ValueError):
-                pass
+    ids = list(season_ids)
+    if not ids:
+        return set()
+
+    def probe(season_id):
+        try:
+            data = client.get_json(
+                "/Items",
+                params={
+                    "ParentId": season_id,
+                    "Recursive": "false",
+                    "IncludeItemTypes": "Episode",
+                    "Limit": 5,
+                    "EnableTotalRecordCount": "false",
+                    "EnableUserData": "false",
+                    "EnableImages": "false",
+                    "UserId": user_id,
+                },
+            )
+        except requests.RequestException:
+            return season_id, True
+        # Looked up at call time so the present-only policy's filter applies.
+        return season_id, any(episode_from_api(item) is not None for item in data.get("Items") or [])
+
+    with ThreadPoolExecutor(max_workers=min(workers, len(ids))) as pool:
+        return {season_id for season_id, present in pool.map(probe, ids) if present}
+
 
 def season_sort_key(season):
     index_number = season.get("indexNumber")
@@ -530,9 +522,8 @@ class CatalogueHandler(BaseHTTPRequestHandler):
                 parsed = season_from_api(item)
                 if parsed is not None:
                     seasons.append(parsed)
-            present = present_season_ids(self.jellyfin, user_id, series_id)
-            if present is not None:
-                seasons = [season for season in seasons if season["id"] in present]
+            present = present_season_ids(self.jellyfin, user_id, [season["id"] for season in seasons])
+            seasons = [season for season in seasons if season["id"] in present]
             seasons.sort(key=season_sort_key)
             payload = {"seriesId": series_id, "seasons": seasons}
             connection.execute(
