@@ -3229,7 +3229,6 @@
 
         /* Hide when modal is open */
         .modal-overlay.active~.roulette-button,
-        .trailer-modal-overlay.active~.roulette-button,
         .roulette-overlay.active~.roulette-button {
             opacity: 0.5;
             pointer-events: none;
@@ -3521,8 +3520,7 @@
                         width: 100%;
                     }
                     
-                    .modal-try-again-btn,
-                    .watch-trailer-btn {
+                    .modal-try-again-btn {
                         width: 100%;
                         justify-content: center;
                     }
@@ -3555,10 +3553,16 @@
                 });
 
                 // Add the button to the modal actions
-                const modalActions = document.querySelector('.modal-actions');
-                if (modalActions) {
-                    modalActions.appendChild(tryAgainBtn);
+                let modalActions = document.querySelector('.modal-actions');
+                if (!modalActions) {
+                    const titleSection = document.querySelector('.modal-title-section');
+                    if (titleSection) {
+                        modalActions = document.createElement('div');
+                        modalActions.className = 'modal-actions';
+                        titleSection.appendChild(modalActions);
+                    }
                 }
+                if (modalActions) modalActions.appendChild(tryAgainBtn);
             }
 
             // Override the openModal function to conditionally show the try again button
