@@ -114,6 +114,54 @@ class LiveTvChannelTests(unittest.TestCase):
         self.call(); self.call()
         self.assertEqual(len(fake.calls), 1)
 
+    def test_empty_successful_listing_is_not_available(self):
+        self.use(FakeJellyfin([]))
+        result = self.call()
+        self.assertEqual(result["status"], 200)
+        self.assertFalse(result["payload"]["available"])
+        self.assertEqual(result["payload"]["total"], 0)
+
+    def test_channel_scan_and_response_pages_are_bounded(self):
+        self.use(FakeJellyfin([raw(i, f"Channel {i}", str(i)) for i in range(20025)]))
+        result = self.call({"limit": ["9999"], "offset": ["-20"]})["payload"]
+        self.assertEqual(result["limit"], service.MAX_PAGE_SIZE)
+        self.assertEqual(result["offset"], 0)
+        self.assertEqual(result["total"], service.MAX_CHANNELS)
+        self.assertEqual(len(result["channels"]), service.MAX_PAGE_SIZE)
+        calls = service.CatalogueHandler.jellyfin.calls
+        self.assertEqual(len(calls), 20)
+        self.assertEqual(calls[-1][1]["StartIndex"], 19000)
+
+    def test_refresh_lock_does_not_block_concurrent_channel_requests(self):
+        self.use(FakeJellyfin([raw(1, "A", "1")]))
+        lock = service.CatalogueHandler.channel_lock
+        lock.acquire()
+        try:
+            sent = self.call()
+        finally:
+            lock.release()
+        self.assertFalse(sent["payload"]["available"])
+        self.assertEqual(len(service.CatalogueHandler.jellyfin.calls), 0)
+
+    def test_malformed_channel_fields_are_safe(self):
+        self.use(FakeJellyfin([
+            None, {"Id": "../private", "Name": "Invalid"},
+            {"Id": "c1", "Name": "A", "CurrentProgram": "bad",
+             "ImageTags": "bad", "ChannelNumber": "17"},
+            {"Id": "c2", "Name": "B", "ImageTags": {"Primary": "../private"}},
+        ]))
+        result = self.call()["payload"]
+        self.assertEqual(result["total"], 2)
+        self.assertEqual(result["channels"][0]["number"], "17")
+        self.assertIsNone(result["channels"][0]["now"])
+        self.assertEqual(result["channels"][0]["logo"], "")
+        self.assertEqual(result["channels"][1]["logo"], "")
+
+    def test_invalid_pagination_rejected(self):
+        self.use(FakeJellyfin([]))
+        for invalid in ({"limit": ["wat"]}, {"offset": ["-inf"]}):
+            self.assertEqual(self.call(invalid)["status"], 400)
+
     def test_logo_only_served_for_listed_channel_with_exact_tag(self):
         self.use(FakeJellyfin([raw(1, "A", "1", tag="good")]))
         self.call()
@@ -128,7 +176,29 @@ class LiveTvChannelTests(unittest.TestCase):
         handle(fake, "/internal/channel-logo/c1/good.png")
         handle(fake, "/internal/channel-logo/c1/other.png")
         handle(fake, "/internal/channel-logo/zzz/good.png")
-        self.assertEqual(results, [("bytes", 200, "image/png"), ("json", 404), ("json", 404)])
+        handle(fake, "/internal/channel-logo/c1/../good.png")
+        handle(fake, "/internal/channel-logo/c1/%2e%2e.png")
+        self.assertEqual(results, [("bytes", 200, "image/png"), ("json", 404), ("json", 404),
+                                   ("json", 404), ("json", 404)])
+
+    def test_svg_channel_logos_are_not_served_same_origin(self):
+        class SvgJellyfin(FakeJellyfin):
+            def fetch_poster(self, item_id, tag, width, quality, image_format="jpg"):
+                return b"<svg><script>bad()</script></svg>", "image/svg+xml"
+
+        self.use(SvgJellyfin([raw(1, "A", "1", tag="good")]))
+        self.call()
+        sent = []
+        fake = SimpleNamespace(
+            channel_cache=service.CatalogueHandler.channel_cache,
+            jellyfin=service.CatalogueHandler.jellyfin,
+            send_json=lambda status, payload, **kw: sent.append(("json", status)),
+            send_bytes=lambda status, body, ctype, **kw: sent.append(("bytes", status)),
+        )
+        service.CatalogueHandler.handle_channel_logo(
+            fake, "/internal/channel-logo/c1/good.png"
+        )
+        self.assertEqual(sent, [("json", 502)])
 
 
 if __name__ == "__main__":
