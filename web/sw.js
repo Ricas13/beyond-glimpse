@@ -1,15 +1,15 @@
 // Beyond Glimpse service worker: cache the tiny application shell only.
 // Catalogue API responses and media artwork deliberately stay out of Cache Storage.
 
-const CACHE_NAME = 'beyond-glimpse-shell-v18';
+const CACHE_NAME = 'beyond-glimpse-shell-v19';
 const SHELL_ASSETS = [
     '/manifest.json',
     '/offline.html',
-    '/large-library.js?v=8',
-    '/library-browse.js?v=3',
+    '/large-library.js?v=9',
+    '/library-browse.js?v=4',
     '/tv-episodes.js?v=2',
     '/startup-status.js?v=3',
-    '/jellyfin-ui.js?v=4',
+    '/jellyfin-ui.js?v=5',
     '/jellyfin-ui.css?v=4'
 ];
 

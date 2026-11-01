@@ -49,7 +49,7 @@ class JellyfinUiAssetTests(unittest.TestCase):
 
     def test_service_worker_precaches_the_assets(self):
         sw = (ROOT / "web" / "sw.js").read_text(encoding="utf-8")
-        self.assertIn("/jellyfin-ui.js?v=4", sw)
+        self.assertIn("/jellyfin-ui.js?v=5", sw)
         self.assertIn("/jellyfin-ui.css?v=4", sw)
 
     def test_sort_query_honours_the_selected_direction(self):
@@ -60,9 +60,10 @@ class JellyfinUiAssetTests(unittest.TestCase):
         css = (ROOT / "web" / "jellyfin-ui.css").read_text(encoding="utf-8")
         self.assertIn("html.jf-ui .roulette-button { display: none !important; }", css)
 
-    def test_libraries_are_sorted_ignoring_leading_punctuation(self):
+    def test_libraries_respect_underscore_prefixes_then_alphabetical(self):
         for name in ("jellyfin-ui.js", "library-browse.js"):
             source = (ROOT / "web" / name).read_text(encoding="utf-8")
+            self.assertIn("underscoreRank", source, name)
             self.assertIn("numeric: true", source, name)
             self.assertIn("p{L}", source, name)
 

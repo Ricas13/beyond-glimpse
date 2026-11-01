@@ -103,11 +103,28 @@
         return `${dataBase}/backdrops/${plural}/${encodeURIComponent(item.id)}.jpg`;
     }
 
-    async function loadDetails(item) {
-        if (!isApiMode()) return item;
-        const response = await fetch(`/api/item/${encodeURIComponent(item.id)}`, { cache: 'no-store' });
-        if (!response.ok) throw new Error(`detail request failed: ${response.status}`);
-        return response.json();
+    // Detail requests are cached briefly so hovering a card (prefetch) and then
+    // clicking it share one request.
+    const detailRequests = new Map();
+    const DETAIL_REUSE_MS = 60000;
+
+    function loadDetails(item) {
+        if (!isApiMode()) return Promise.resolve(item);
+        const key = String(item.id);
+        const cached = detailRequests.get(key);
+        if (cached && Date.now() - cached.at < DETAIL_REUSE_MS) return cached.promise;
+        const promise = fetch(`/api/item/${encodeURIComponent(item.id)}`, { cache: 'no-store' })
+            .then(response => {
+                if (!response.ok) throw new Error(`detail request failed: ${response.status}`);
+                return response.json();
+            })
+            .catch(error => {
+                detailRequests.delete(key);
+                throw error;
+            });
+        detailRequests.set(key, { promise, at: Date.now() });
+        while (detailRequests.size > 60) detailRequests.delete(detailRequests.keys().next().value);
+        return promise;
     }
 
     function safeTextPlaceholder(container, title, large = false) {
@@ -278,6 +295,15 @@
         info.append(title, year, added);
         mediaItem.append(posterContainer, info);
         mediaItem.addEventListener('click', activateCard);
+        if (isApiMode()) {
+            // Start the detail request while the pointer rests on a card.
+            let hoverTimer = null;
+            mediaItem.addEventListener('pointerenter', event => {
+                if (event.pointerType !== 'mouse') return;
+                hoverTimer = setTimeout(() => loadDetails(item).catch(() => {}), 120);
+            });
+            mediaItem.addEventListener('pointerleave', () => clearTimeout(hoverTimer));
+        }
         requestAnimationFrame(() => { mediaItem.style.opacity = '1'; });
         return mediaItem;
     }
@@ -503,34 +529,33 @@
         container.appendChild(empty);
     }
 
-    async function v2OpenModal(indexItem, type) {
-        const generation = ++modalOpenGeneration;
-        let item = indexItem;
-        try { item = await loadDetails(indexItem); }
-        catch (error) { console.warn('Could not load lazy item details:', error); }
-        if (generation !== modalOpenGeneration) return;
+    // Fill the details view. `phase` is 'first' (lightweight index data, shown at
+    // once) or 'detail' (full data from /api/item, which can take a while).
+    function fillModal(item, indexItem, type, phase) {
+        const pending = phase === 'first' && isApiMode();
+        if (phase === 'first') {
+            const posterContainer = document.querySelector('.modal-poster');
+            posterContainer.replaceChildren();
+            const pUrl = posterUrl(indexItem, type);
+            if (pUrl) {
+                const poster = document.createElement('img');
+                poster.src = pUrl;
+                poster.alt = item.title || '';
+                poster.onerror = function () { this.remove(); safeTextPlaceholder(posterContainer, item.title, true); };
+                posterContainer.appendChild(poster);
+            } else safeTextPlaceholder(posterContainer, item.title, true);
 
-        const posterContainer = document.querySelector('.modal-poster');
-        posterContainer.replaceChildren();
-        const pUrl = posterUrl(indexItem, type);
-        if (pUrl) {
-            const poster = document.createElement('img');
-            poster.src = pUrl;
-            poster.alt = item.title || '';
-            poster.onerror = function () { this.remove(); safeTextPlaceholder(posterContainer, item.title, true); };
-            posterContainer.appendChild(poster);
-        } else safeTextPlaceholder(posterContainer, item.title, true);
-
-        const backdrop = document.querySelector('.modal-backdrop');
-        backdrop.replaceChildren();
-        backdrop.style.backgroundImage = 'none';
-        const bUrl = legacyBackdropUrl(item, type);
-        if (bUrl) backdrop.style.backgroundImage = `url("${bUrl}")`;
-        else {
-            const fallback = document.createElement('div');
-            fallback.className = 'backdrop-text-placeholder';
-            fallback.textContent = type === 'movies' ? 'Movie' : 'TV Show';
-            backdrop.appendChild(fallback);
+            const backdrop = document.querySelector('.modal-backdrop');
+            backdrop.replaceChildren();
+            backdrop.style.backgroundImage = 'none';
+            const bUrl = legacyBackdropUrl(item, type);
+            if (bUrl) backdrop.style.backgroundImage = `url("${bUrl}")`;
+            else {
+                const fallback = document.createElement('div');
+                fallback.className = 'backdrop-text-placeholder';
+                fallback.textContent = type === 'movies' ? 'Movie' : 'TV Show';
+                backdrop.appendChild(fallback);
+            }
         }
 
         document.querySelector('.modal-title').textContent = item.title || '';
@@ -563,7 +588,9 @@
             episodes.style.display = item.leafCount ? 'block' : 'none';
         } else duration.style.display = 'none';
 
-        document.getElementById('modal-summary').textContent = item.summary || 'No summary available.';
+        const summary = document.getElementById('modal-summary');
+        summary.textContent = pending ? 'Loading details…' : (item.summary || 'No summary available.');
+        summary.style.opacity = pending ? '0.6' : '';
         const genres = document.getElementById('modal-genres');
         genres.replaceChildren();
         if (item.genres && item.genres.length) item.genres.forEach(genre => {
@@ -580,7 +607,7 @@
             const name = document.createElement('div'); name.className = 'cast-name'; name.textContent = actor.name || '';
             const role = document.createElement('div'); role.className = 'cast-role'; role.textContent = actor.role || '';
             row.append(name, role); cast.appendChild(row);
-        }); else appendEmptyMessage(cast, 'No cast information available');
+        }); else appendEmptyMessage(cast, pending ? 'Loading cast…' : 'No cast information available');
 
         let dateAdded = document.getElementById('modal-added-date');
         if (!dateAdded) {
@@ -590,8 +617,29 @@
             section.append(heading, dateAdded); document.querySelector('.modal-body').appendChild(section);
         }
         dateAdded.textContent = item.addedAt ? formatDate(item.addedAt) : '';
-        const modalBody = document.querySelector('.modal-body');
-        modalBody.scrollTop = 0; document.body.style.overflow = 'hidden'; modalOverlay.classList.add('active');
+        if (phase === 'first') {
+            const modalBody = document.querySelector('.modal-body');
+            modalBody.scrollTop = 0; document.body.style.overflow = 'hidden'; modalOverlay.classList.add('active');
+        }
+    }
+
+    // Opens at once from the index data, then fills in details when they arrive.
+    // The returned promise resolves after the first paint, so callers that add to
+    // the modal (the episode browser) are not held up by the slow detail request.
+    function v2OpenModal(indexItem, type) {
+        const generation = ++modalOpenGeneration;
+        fillModal(indexItem, indexItem, type, 'first');
+        if (!isApiMode()) return Promise.resolve();
+        loadDetails(indexItem).then(
+            detail => {
+                if (generation === modalOpenGeneration) fillModal(detail, indexItem, type, 'detail');
+            },
+            error => {
+                console.warn('Could not load lazy item details:', error);
+                if (generation === modalOpenGeneration) fillModal(indexItem, indexItem, type, 'detail');
+            }
+        );
+        return Promise.resolve();
     }
 
     async function v2LoadMedia() {
