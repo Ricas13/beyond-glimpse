@@ -93,7 +93,7 @@ class PresentEpisodesOnlyTests(unittest.TestCase):
                     {"Id": "e1", "SeasonId": "s1"},
                     {"Id": "e2", "SeasonId": "s1"},
                     {"Id": "e3", "SeasonId": "s3"},
-                ]}
+                ], "TotalRecordCount": 3}
 
         self.assertEqual(service.present_season_ids(Client(), "u", "series"), {"s1", "s3"})
 
@@ -103,6 +103,44 @@ class PresentEpisodesOnlyTests(unittest.TestCase):
                 return {"Items": [{"Id": "e1"}]}
 
         self.assertIsNone(service.present_season_ids(Client(), "u", "series"))
+
+    def test_no_episodes_means_no_visible_seasons(self):
+        class Client:
+            def get_json(self, path, params=None):
+                return {"Items": [], "TotalRecordCount": 0}
+
+        self.assertEqual(service.present_season_ids(Client(), "u", "series"), set())
+
+    def test_partial_membership_does_not_drop_valid_seasons(self):
+        class Client:
+            def get_json(self, path, params=None):
+                return {"Items": [
+                    {"Id": "e1", "SeasonId": "s1"},
+                    {"Id": "e2"},
+                ], "TotalRecordCount": 2}
+
+        self.assertIsNone(service.present_season_ids(Client(), "u", "series"))
+
+    def test_episode_membership_pages_through_server_capped_results(self):
+        episode_list = [
+            {"Id": f"e{index}", "SeasonId": "s1" if index < 1000 else "s2"}
+            for index in range(1001)
+        ]
+        calls = []
+
+        class Client:
+            def get_json(self, path, params=None):
+                calls.append(params["StartIndex"])
+                start = params["StartIndex"]
+                # Simulate server-side pagination even with a requested Limit.
+                return {"Items": episode_list[start:start + 500],
+                        "TotalRecordCount": len(episode_list)}
+
+        self.assertEqual(
+            service.present_season_ids(Client(), "u", "series"),
+            {"s1", "s2"},
+        )
+        self.assertEqual(calls, [0, 500, 1000])
 
     def test_old_episode_cache_is_invalidated_once(self):
         with tempfile.TemporaryDirectory() as tmp:

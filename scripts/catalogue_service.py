@@ -75,34 +75,49 @@ def episode_from_api(item):
 
 
 def present_season_ids(client, user_id, series_id):
-    """Season IDs that contain at least one episode actually present.
+    """Season IDs containing at least one present episode.
 
-    Returns None when the answer is unknown (no episode carried a SeasonId), so
-    callers keep the unfiltered list rather than hiding everything.
+    Return None if a present episode has no SeasonId: membership is unknown,
+    so do not hide a valid season. An empty response means no present seasons.
+    Page explicitly because Jellyfin may cap /Items results below our Limit.
     """
-    data = client.get_json(
-        "/Items",
-        params={
-            "ParentId": series_id,
-            "Recursive": "true",
-            "IncludeItemTypes": "Episode",
-            "EnableTotalRecordCount": "false",
-            "EnableUserData": "false",
-            "EnableImages": "false",
-            "UserId": user_id,
-        },
-    )
-    ids, saw_season_id = set(), False
-    for item in data.get("Items") or []:
-        season_id = str(item.get("SeasonId") or "")
-        if not season_id:
-            continue
-        saw_season_id = True
-        # Looked up at call time so the present-only policy's filter applies.
-        if episode_from_api(item) is not None:
+    ids = set()
+    offset = 0
+    page_size = 1000
+    while True:
+        data = client.get_json(
+            "/Items",
+            params={
+                "ParentId": series_id,
+                "Recursive": "true",
+                "IncludeItemTypes": "Episode",
+                "StartIndex": offset,
+                "Limit": page_size,
+                "EnableTotalRecordCount": "true",
+                "EnableUserData": "false",
+                "EnableImages": "false",
+                "UserId": user_id,
+            },
+        )
+        items = data.get("Items") or []
+        if not items:
+            return ids
+        for item in items:
+            # Looked up at call time so the present-only policy's filter applies.
+            if episode_from_api(item) is None:
+                continue
+            season_id = str(item.get("SeasonId") or "")
+            if not season_id:
+                return None
             ids.add(season_id)
-    return ids if saw_season_id else None
-
+        offset += len(items)
+        total = data.get("TotalRecordCount")
+        if total is not None:
+            try:
+                if offset >= int(total):
+                    return ids
+            except (TypeError, ValueError):
+                pass
 
 def season_sort_key(season):
     index_number = season.get("indexNumber")
