@@ -413,7 +413,7 @@ class JellyfinClient:
         items = data.get("Items") or []
         return items[0] if items else None
 
-    def fetch_poster(self, item_id, tag, max_width, quality):
+    def fetch_poster(self, item_id, tag, max_width, quality, image_format="jpg"):
         response = self.session.get(
             f"{self.url}/Items/{item_id}/Images/Primary",
             stream=True,
@@ -421,9 +421,9 @@ class JellyfinClient:
                 "tag": tag,
                 "maxWidth": int(max_width),
                 "quality": int(quality),
-                "format": "jpg",
+                "format": image_format,
             },
-            headers={"Accept": "image/jpeg,image/*"},
+            headers={"Accept": "image/png,image/*" if image_format == "png" else "image/jpeg,image/*"},
             timeout=(10, self.timeout),
         )
         try:

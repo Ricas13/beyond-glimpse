@@ -87,11 +87,14 @@ class UltraLightCatalogueTests(unittest.TestCase):
         self.assertIn("proxy_cache poster_cache;", config)
         self.assertIn("$poster_image_tag", config)
         self.assertIn("127.0.0.1:8091/internal/poster", config)
+        self.assertIn("127.0.0.1:8091/internal/channel-logo", config)
         self.assertNotIn("abcdef123456", config)
         self.assertNotIn("MediaBrowser Token", config)
 
     def test_proxy_fails_closed_when_jellyfin_is_unconfigured(self):
-        self.assertEqual(proxy.build_config("", "", 320, 72), "location /poster/ { return 404; }\n")
+        disabled = proxy.build_config("", "", 320, 72)
+        self.assertIn("location /poster/ { return 404; }", disabled)
+        self.assertIn("location /channel-logo/ { return 404; }", disabled)
 
     def test_web_runtime_uses_paginated_api_lazy_details_and_proxy_posters(self):
         runtime = (ROOT / "web" / "large-library.js").read_text(encoding="utf-8")

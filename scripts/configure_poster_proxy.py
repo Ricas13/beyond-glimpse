@@ -12,14 +12,31 @@ def build_config(url, token, max_width=320, quality=72):
     # are no longer rendered into Nginx configuration. We still require both to
     # enable the public poster route so an unconfigured deployment fails closed.
     if not url or not token:
-        return "location /poster/ { return 404; }\n"
+        return "location /poster/ { return 404; }\nlocation /channel-logo/ { return 404; }\n"
 
     # Validate operator values early even though the catalogue service ultimately
     # applies them to the Jellyfin request.
     max(64, min(1000, int(max_width)))
     max(30, min(95, int(quality)))
 
-    return '''location ~ ^/poster/([0-9A-Za-z-]+)/([0-9A-Za-z._~-]+)\\.jpg$ {
+    return '''location ~ ^/channel-logo/([0-9A-Za-z-]+)/([0-9A-Za-z._~-]+)\\.png$ {
+    set $logo_item_id $1;
+    set $logo_image_tag $2;
+    proxy_cache poster_cache;
+    proxy_cache_key "$uri";
+    proxy_cache_lock on;
+    proxy_cache_lock_timeout 10s;
+    proxy_cache_valid 200 1d;
+    proxy_cache_valid 404 1m;
+    proxy_cache_use_stale error timeout updating http_500 http_502 http_503 http_504;
+    proxy_ignore_headers Set-Cookie Cache-Control Expires;
+    proxy_hide_header Set-Cookie;
+    expires 1d;
+    proxy_set_header Host 127.0.0.1;
+    proxy_pass http://127.0.0.1:8091/internal/channel-logo/$logo_item_id/$logo_image_tag.png;
+}
+
+location ~ ^/poster/([0-9A-Za-z-]+)/([0-9A-Za-z._~-]+)\\.jpg$ {
     set $poster_item_id $1;
     set $poster_image_tag $2;
     proxy_cache poster_cache;
