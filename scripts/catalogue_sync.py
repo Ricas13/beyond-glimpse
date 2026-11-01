@@ -68,25 +68,91 @@ def persist_libraries(connection, libraries):
     ], ensure_ascii=False, separators=(",", ":")))
 
 
-def deletion_guard(connection, removed_ids, *, stage):
+MIN_GUARDED_LIBRARY_SIZE = 20
+
+
+def deliberately_removed_library_ids(previous_libraries_json, libraries):
+    """Library IDs that left the eligible set because the operator asked.
+
+    A library vanishing from Jellyfin's listing is otherwise indistinguishable
+    from a partial/failed listing, so it stays subject to the deletion guard
+    unless it is named in JELLYFIN_EXCLUDE_LIBRARIES (by ID or by the name we
+    stored last run) or RECONCILE_ALLOW_LIBRARY_REMOVAL=1 is set.
+    """
+    try:
+        previous = json.loads(previous_libraries_json or "[]")
+    except (TypeError, ValueError):
+        previous = []
+    current = {str(lib["id"]) for lib in libraries}
+    allow_all = os.environ.get("RECONCILE_ALLOW_LIBRARY_REMOVAL", "").strip().lower() in {"1", "true", "yes"}
+    excluded = {
+        value.strip()
+        for value in os.environ.get("JELLYFIN_EXCLUDE_LIBRARIES", "").split(",")
+        if value.strip()
+    }
+    result = set()
+    for lib in previous:
+        library_id = str(lib.get("id") or "")
+        if not library_id or library_id in current:
+            continue
+        if allow_all or library_id in excluded or str(lib.get("name") or "") in excluded:
+            result.add(library_id)
+    return result
+
+
+def deletion_guard(connection, removed_ids, *, stage, ignore_library_ids=(), active_library_ids=None):
+    """Refuse suspiciously large deletions.
+
+    Items in ``ignore_library_ids`` (libraries deliberately removed by the
+    operator) are not counted. For libraries still present in
+    ``active_library_ids``, the per-library limit only applies once the library
+    is large enough for a percentage to be meaningful, so deleting one item from
+    a tiny library is not blocked. A library that vanished from the listing is
+    always checked, because that looks the same as a partial listing.
+    """
+    active = None if active_library_ids is None else {str(v) for v in active_library_ids}
     removed = set(removed_ids)
     if not removed:
         return
-    existing = connection.execute("SELECT id,library_id FROM items").fetchall()
+    ignore = {str(value) for value in ignore_library_ids}
+    existing = [
+        row for row in connection.execute("SELECT id,library_id FROM items").fetchall()
+        if row["library_id"] not in ignore
+    ]
     if not existing:
+        return
+    removed &= {row["id"] for row in existing}
+    if not removed:
         return
     limit = float(os.environ.get("RECONCILE_MAX_DELETE_FRACTION", "0.35"))
     if not 0 <= limit <= 1:
         raise ValueError("RECONCILE_MAX_DELETE_FRACTION must be between 0 and 1")
-    if len(removed) / len(existing) > limit:
-        raise RuntimeError(f"{stage}: refusing suspicious deletion of {len(removed)}/{len(existing)} items")
-    counts, removed_counts = {}, {}
+    counts = {}
     for row in existing:
         library_id = row["library_id"]
         counts[library_id] = counts.get(library_id, 0) + 1
-        if row["id"] in removed:
+    # Small *eligible* libraries are exempt from both percentage checks.
+    # Vanished libraries, however small, remain guarded against partial listings.
+    guarded = [
+        row for row in existing
+        if active is None or row["library_id"] not in active
+        or counts[row["library_id"]] >= MIN_GUARDED_LIBRARY_SIZE
+    ]
+    if not guarded:
+        return
+    guarded_removed = removed & {row["id"] for row in guarded}
+    if len(guarded_removed) / len(guarded) > limit:
+        raise RuntimeError(
+            f"{stage}: refusing suspicious deletion of {len(guarded_removed)}/{len(guarded)} guarded items"
+        )
+    removed_counts = {}
+    for row in guarded:
+        if row["id"] in guarded_removed:
+            library_id = row["library_id"]
             removed_counts[library_id] = removed_counts.get(library_id, 0) + 1
     for library_id, count in counts.items():
+        if active is not None and library_id in active and count < MIN_GUARDED_LIBRARY_SIZE:
+            continue
         if removed_counts.get(library_id, 0) / count > limit:
             raise RuntimeError(f"{stage}: refusing suspicious deletion from library {library_id}")
 
@@ -157,7 +223,11 @@ def bootstrap(client, connection, *, reason="initial bootstrap"):
         progress_library="",
     )
 
-    persist_libraries(connection, libraries)
+    ignored_libraries = deliberately_removed_library_ids(
+        get_meta(connection, "libraries_json", "[]"), libraries
+    )
+    # Retain the last known library IDs/names until the guarded bootstrap
+    # succeeds; a failed partial listing must not erase exclusion-by-name data.
     connection.commit()
     fts_enabled = get_meta(connection, "fts_enabled", "0") == "1"
 
@@ -224,10 +294,15 @@ def bootstrap(client, connection, *, reason="initial bootstrap"):
             "SELECT id FROM items WHERE generation <> ?", (generation,)
         )
     ]
-    deletion_guard(connection, stale_ids, stage="bootstrap")
+    deletion_guard(
+        connection, stale_ids, stage="bootstrap",
+        ignore_library_ids=ignored_libraries,
+        active_library_ids=[lib["id"] for lib in libraries],
+    )
     connection.execute("BEGIN IMMEDIATE")
     try:
         removed = delete_items(connection, stale_ids)
+        persist_libraries(connection, libraries)
         set_meta(connection, "bootstrap_complete", "1")
         set_meta(connection, "watermark", sync_server_time)
         set_meta(connection, "last_reconcile", int(time.time()))
@@ -365,7 +440,12 @@ def reconcile(client, connection, user_id, libraries, generation):
         str(row["id"]): (str(row["library_id"]), row["media_type"])
         for row in connection.execute("SELECT id,library_id,media_type FROM items")
     }
-    if existing and total_seen == 0:
+    ignored_libraries = deliberately_removed_library_ids(
+        get_meta(connection, "libraries_json", "[]"), libraries
+    )
+    if existing and total_seen == 0 and any(
+        library_id not in ignored_libraries for library_id, _ in existing.values()
+    ):
         raise RuntimeError("reconciliation safety guard: Jellyfin returned zero IDs for a non-empty catalogue")
 
     deleted = sorted(set(existing) - set(seen))
@@ -376,7 +456,11 @@ def reconcile(client, connection, user_id, libraries, generation):
         if existing[item_id] != seen[item_id]
     }
 
-    deletion_guard(connection, deleted, stage="reconciliation")
+    deletion_guard(
+        connection, deleted, stage="reconciliation",
+        ignore_library_ids=ignored_libraries,
+        active_library_ids=[lib["id"] for lib in libraries],
+    )
 
     refresh_ids = sorted(new | moved)
     refreshed = refresh_inventory_items(
@@ -386,6 +470,7 @@ def reconcile(client, connection, user_id, libraries, generation):
     connection.execute("BEGIN IMMEDIATE")
     try:
         removed = delete_items(connection, deleted)
+        persist_libraries(connection, libraries)
         prune_expired_caches(connection)
         set_meta(connection, "last_reconcile", int(time.time()))
         set_meta(connection, "last_reconcile_ids", total_seen)
