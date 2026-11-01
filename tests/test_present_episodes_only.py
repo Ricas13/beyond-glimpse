@@ -133,6 +133,8 @@ class PresentEpisodesOnlyTests(unittest.TestCase):
 
         class Client:
             def get_json(self, path, params=None):
+                if params["StartIndex"] > 0:
+                    return {"Items": []}
                 return {"Items": [{"Id": "v", "LocationType": "Virtual"}]}
 
         try:
