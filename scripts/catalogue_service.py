@@ -308,10 +308,17 @@ class CatalogueHandler(BaseHTTPRequestHandler):
                 # counts from whatever has been indexed so far.
                 try:
                     libraries = self.cached_libraries()
-                except requests.RequestException as exc:
+                except (requests.RequestException, RuntimeError, ValueError, TypeError, KeyError) as exc:
+                    # Live discovery is a best-effort first-run fallback, never a
+                    # prerequisite for serving the existing local catalogue.
                     print(f"catalogue-api library list unavailable: {exc}", flush=True)
                     libraries = []
-            libraries = [lib for lib in libraries if lib.get("media_type") == media_type]
+            if not isinstance(libraries, list):
+                libraries = []
+            libraries = [
+                lib for lib in libraries
+                if isinstance(lib, dict) and lib.get("media_type") == media_type
+            ]
             settled = get_meta(connection, "bootstrap_complete", "0") == "1"
             counts = {
                 str(row["library_id"]): int(row["count"])
