@@ -81,6 +81,22 @@ class JellyfinUiAssetTests(unittest.TestCase):
     def test_phone_menu_lists_libraries(self):
         source = (ROOT / "web" / "jellyfin-ui.js").read_text(encoding="utf-8")
         self.assertIn("jf-mlibs", source)
+        self.assertIn("renderMobileLibraries(libraries, current, state)", source)
+        self.assertIn("list.scrollTop = scrollTop", source)
+        self.assertIn("if (live.open) closeLive()", source)
+
+    def test_roulette_retry_keeps_working_without_trailer_actions(self):
+        html = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
+        self.assertIn("modalActions = document.createElement('div')", html)
+        self.assertIn("modalActions.appendChild(tryAgainBtn)", html)
+        self.assertNotIn(".watch-trailer-btn", html)
+
+    def test_keyboard_modals_restore_focus_without_repeat_activation(self):
+        runtime = (ROOT / "web" / "large-library.js").read_text(encoding="utf-8")
+        self.assertIn("event.target !== mediaItem || event.repeat", runtime)
+        self.assertIn("lastCardActivator = mediaItem", runtime)
+        self.assertIn("lastCardActivator.isConnected", runtime)
+        self.assertIn("document.querySelector('.modal-close')?.focus()", runtime)
 
 
 if __name__ == "__main__":
