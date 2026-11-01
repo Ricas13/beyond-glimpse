@@ -149,9 +149,30 @@
         }
     }
 
+    // While the first index runs, library counts grow; refresh the drawer when the
+    // indexed item total changes (cheap status call, stops once indexing is done).
+    let lastIndexed = -1;
+    async function pollCounts() {
+        let settled = false;
+        try {
+            const response = await fetch('/api/status', { cache: 'no-store' });
+            if (response.ok) {
+                const status = await response.json();
+                const indexed = Number(status.movies || 0) + Number(status.tvShows || 0);
+                if (indexed !== lastIndexed && typeof window.__beyondGlimpseReloadLibraries === 'function') {
+                    lastIndexed = indexed;
+                    await window.__beyondGlimpseReloadLibraries();
+                }
+                settled = Boolean(status.bootstrapComplete) && status.state !== 'bootstrap';
+            }
+        } catch (_) { /* the API may still be starting */ }
+        if (!settled) setTimeout(pollCounts, 8000);
+    }
+
     function init() {
         buildTitle();
         buildDrawer();
+        pollCounts();
 
         window.addEventListener('bg:library-state', renderDrawer);
         const tabs = document.querySelector('.header .tabs');
