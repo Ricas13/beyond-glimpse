@@ -423,7 +423,7 @@ class JellyfinClient:
                 "quality": int(quality),
                 "format": image_format,
             },
-            headers={"Accept": "image/jpeg,image/png,image/*"},
+            headers={"Accept": "image/png,image/*" if image_format == "png" else "image/jpeg,image/*"},
             timeout=(10, self.timeout),
         )
         try:
