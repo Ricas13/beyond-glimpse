@@ -822,7 +822,7 @@ class CatalogueHandler(BaseHTTPRequestHandler):
                     if isinstance(total, int) and offset >= total:
                         break
                 channels.sort(key=lambda c: (parse_channel_number(c["number"]), c["name"].casefold()))
-                cls.channel_cache = {"fetched_at": now, "channels": channels, "available": bool(channels)}
+                cls.channel_cache = {"fetched_at": int(time.time()), "channels": channels, "available": bool(channels)}
             except (requests.RequestException, RuntimeError, ValueError, TypeError, AttributeError, KeyError) as exc:
                 print(f"catalogue-api live TV channels unavailable: {exc}", flush=True)
                 # Authentication/access loss or removal of Live TV must revoke
@@ -831,11 +831,11 @@ class CatalogueHandler(BaseHTTPRequestHandler):
                           if isinstance(exc, requests.HTTPError) and exc.response is not None
                           else None)
                 if status in {401, 403, 404}:
-                    cls.channel_cache = {"fetched_at": now, "channels": [], "available": False}
+                    cls.channel_cache = {"fetched_at": int(time.time()), "channels": [], "available": False}
                 else:
                     # Transient upstream failures retain the previous good list.
                     cls.channel_cache = {
-                        "fetched_at": now,
+                        "fetched_at": int(time.time()),
                         "channels": cache["channels"],
                         "available": cache["available"],
                     }
