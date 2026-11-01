@@ -655,3 +655,103 @@ html.jf-ui .jf-channel-bar i { display: block; height: 100%; background: var(--j
 /* Library-only controls make no sense on the channel list. */
 html.jf-ui.jf-live-open .header .sort-toggle,
 html.jf-ui.jf-live-open .header .search-box { visibility: hidden; }
+
+/* ======================= Toolbar, single-row header, no roulette ======================= */
+html.jf-ui .roulette-button { display: none !important; }
+
+html.jf-ui .jf-ico-sort { --jf-ico: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M3 18h6v-2H3v2zM3 6v2h18V6H3zm0 7h12v-2H3v2z'/%3E%3C/svg%3E"); }
+html.jf-ui .jf-ico-filter { --jf-ico: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M10 18h4v-2h-4v2zM3 6v2h18V6H3zm3 7h12v-2H6v2z'/%3E%3C/svg%3E"); }
+
+html.jf-ui .jf-toolbar { display: none; align-items: center; gap: 0.25rem; }
+html.jf-ui .jf-tool {
+    display: grid;
+    place-items: center;
+    width: 2.6rem;
+    height: 2.6rem;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--jf-text);
+    cursor: pointer;
+}
+html.jf-ui .jf-tool:hover,
+html.jf-ui .jf-tool[aria-expanded="true"] { background: var(--jf-hover); }
+html.jf-ui .jf-tool.active { color: var(--jf-accent); }
+html.jf-ui .jf-tool-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    max-width: 14rem;
+    padding: 0.2rem 0.3rem 0.2rem 0.7rem;
+    border-radius: 999px;
+    background: rgba(0, 164, 220, 0.18);
+    color: var(--jf-accent);
+    font-size: 0.85rem;
+    white-space: nowrap;
+}
+html.jf-ui .jf-tool-chip[hidden] { display: none; }
+html.jf-ui .jf-tool-chip > span { overflow: hidden; text-overflow: ellipsis; }
+html.jf-ui .jf-chip-clear {
+    width: 1.4rem;
+    height: 1.4rem;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    color: inherit;
+    font-size: 1.1rem;
+    line-height: 1;
+    cursor: pointer;
+}
+html.jf-ui .jf-chip-clear:hover { background: rgba(255, 255, 255, 0.15); }
+
+html.jf-ui .jf-menu {
+    position: fixed;
+    z-index: 1300;
+    min-width: 15rem;
+    max-width: min(22rem, calc(100vw - 1rem));
+    padding: 0.35rem 0;
+    background: var(--jf-surface);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 4px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+}
+html.jf-ui .jf-menu-scroll { max-height: min(26rem, 70vh); overflow-y: auto; }
+html.jf-ui .jf-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    width: 100%;
+    padding: 0.55rem 0.9rem;
+    border: 0;
+    background: transparent;
+    color: var(--jf-text);
+    font: inherit;
+    font-size: 0.92rem;
+    text-align: left;
+    cursor: pointer;
+}
+html.jf-ui .jf-menu-item:hover { background: var(--jf-hover); }
+html.jf-ui .jf-menu-item[aria-checked="true"] { color: var(--jf-accent); }
+html.jf-ui .jf-menu-check { flex: 0 0 1rem; color: var(--jf-accent); }
+html.jf-ui .jf-menu-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+html.jf-ui .jf-menu-count { flex: none; font-size: 0.78rem; color: var(--jf-text-dim); }
+html.jf-ui .jf-menu-empty { padding: 0.6rem 0.9rem; font-size: 0.85rem; color: var(--jf-text-dim); }
+
+/* The icon toolbar replaces the old text buttons from tablet width up. */
+@media screen and (min-width: 769px) {
+    html.jf-ui .header .sort-toggle { display: none !important; }
+    html.jf-ui .jf-toolbar {
+        display: flex;
+        position: absolute;
+        right: 1rem;
+        top: var(--jf-topbar-h);
+        height: var(--jf-tabs-h);
+    }
+}
+/* With the drawer, Movies/TV Shows live there: the top bar is one row. */
+@media screen and (min-width: 1100px) {
+    html.jf-ui { --jf-tabs-h: 0px; }
+    html.jf-ui .header-content > .tabs { display: none; }
+    html.jf-ui .jf-toolbar { position: static; order: 3; height: var(--jf-topbar-h); }
+}
+html.jf-ui.jf-live-open .header .jf-toolbar { visibility: hidden; }

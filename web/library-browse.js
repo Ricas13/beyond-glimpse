@@ -11,6 +11,15 @@
     const libraryLists = { movie: [], tvshow: [] };
     const controls = {};
 
+    // Alphabetical by name, ignoring leading punctuation such as the "_" prefixes
+    // people use to force an order inside Jellyfin, with numbers compared naturally.
+    const nameCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+    const sortableName = name => String(name || '').replace(/^[^\p{L}\p{N}]+/u, '');
+    function compareLibraries(a, b) {
+        return nameCollator.compare(sortableName(a.name), sortableName(b.name)) ||
+            nameCollator.compare(String(a.name || ''), String(b.name || ''));
+    }
+
     function normalizeType(value) {
         return value === 'tvshow' || value === 'tvshows' || value === 'series' ? 'tvshow' : 'movie';
     }
@@ -236,7 +245,7 @@
             const response = await originalFetch(`/api/libraries?type=${encodeURIComponent(type)}`, { cache: 'no-store' });
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
             const payload = await response.json();
-            libraryLists[type] = Array.isArray(payload.libraries) ? payload.libraries : [];
+            libraryLists[type] = Array.isArray(payload.libraries) ? payload.libraries.slice().sort(compareLibraries) : [];
         } catch (error) {
             console.warn(`Could not load ${type} libraries:`, error);
             libraryLists[type] = [];

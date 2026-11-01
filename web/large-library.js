@@ -50,14 +50,18 @@
     }
 
     function sortQuery() {
-        const method = String(currentSortMethod || 'title').toLowerCase();
+        const method = String(currentSortMethod || 'alpha').toLowerCase();
+        // index.html keeps the real direction per method ('asc' | 'desc'); older
+        // builds encoded it in the method name, so fall back to that.
+        const stored = typeof sortDirection === 'object' && sortDirection ? sortDirection[method] : null;
+        const direction = stored === 'asc' || stored === 'desc' ? stored : null;
         if (method.includes('date') || method.includes('added') || method.includes('recent')) {
-            return { sort: 'added', order: method.includes('asc') ? 'asc' : 'desc' };
+            return { sort: 'added', order: direction || (method.includes('asc') ? 'asc' : 'desc') };
         }
         if (method.includes('year') || method.includes('release')) {
-            return { sort: 'year', order: method.includes('asc') ? 'asc' : 'desc' };
+            return { sort: 'year', order: direction || (method.includes('asc') ? 'asc' : 'desc') };
         }
-        return { sort: 'title', order: method.includes('desc') ? 'desc' : 'asc' };
+        return { sort: 'title', order: direction || (method.includes('desc') ? 'desc' : 'asc') };
     }
 
     async function loadStaticIndexes(base, type) {

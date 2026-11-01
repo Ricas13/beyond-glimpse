@@ -22,6 +22,14 @@
     let livePanel = null;
     const live = { open: false, query: '', offset: 0, hasMore: false, loading: false, total: 0, generation: 0, observer: null, controller: null, progressTimer: null, searchTimer: null };
 
+    // Alphabetical, ignoring leading punctuation ("__Movies" sorts as "Movies").
+    const nameCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+    const sortableName = name => String(name || '').replace(/^[^\p{L}\p{N}]+/u, '');
+    function compareLibraries(a, b) {
+        return nameCollator.compare(sortableName(a.name), sortableName(b.name)) ||
+            nameCollator.compare(String(a.name || ''), String(b.name || ''));
+    }
+
     function el(tag, className, text) {
         const node = document.createElement(tag);
         if (className) node.className = className;
@@ -95,7 +103,8 @@
         }
 
         const libraries = TYPES.flatMap(entry =>
-            (state.libraryLists[entry.type] || []).map(library => ({ ...library, entry })));
+            (state.libraryLists[entry.type] || []).map(library => ({ ...library, entry })))
+            .sort(compareLibraries);
         if (libraries.length) {
             scroll.appendChild(el('div', 'jf-nav-heading', 'Libraries'));
             for (const library of libraries) {
@@ -183,6 +192,162 @@
         if (!settled) setTimeout(pollCounts, 8000);
     }
 
+
+
+    // ---------------------------------------------------------------- Toolbar
+    // Jellyfin-style icon buttons for sorting and filtering. They drive the app's
+    // existing controls (setSortMethod / setGenreFilter), which stay in the DOM.
+    const SORT_OPTIONS = [
+        { method: 'alpha', direction: 'asc', label: 'Name (A–Z)' },
+        { method: 'alpha', direction: 'desc', label: 'Name (Z–A)' },
+        { method: 'date', direction: 'desc', label: 'Date added (newest first)' },
+        { method: 'date', direction: 'asc', label: 'Date added (oldest first)' }
+    ];
+    let toolbar = null;
+    let openMenu = null;
+
+    function currentSort() {
+        try { return { method: currentSortMethod, direction: sortDirection[currentSortMethod] }; }
+        catch (_) { return { method: 'alpha', direction: 'asc' }; }
+    }
+
+    function applySort(option) {
+        if (typeof setSortMethod !== 'function') return;
+        // setSortMethod toggles the direction when the method is already active, so
+        // pre-set the direction such that exactly one call lands on the wanted one.
+        const same = currentSort().method === option.method;
+        sortDirection[option.method] = same ? (option.direction === 'asc' ? 'desc' : 'asc') : option.direction;
+        setSortMethod(option.method);
+    }
+
+    function activeGenre() {
+        try { return currentGenre || 'all'; } catch (_) { return 'all'; }
+    }
+
+    function closeMenu() {
+        if (!openMenu) return;
+        openMenu.node.remove();
+        openMenu.button.setAttribute('aria-expanded', 'false');
+        openMenu = null;
+    }
+
+    function showMenu(button, build) {
+        const wasOpen = openMenu && openMenu.button === button;
+        closeMenu();
+        if (wasOpen) return;
+        const node = el('div', 'jf-menu');
+        node.setAttribute('role', 'menu');
+        build(node);
+        document.body.appendChild(node);
+        const rect = button.getBoundingClientRect();
+        node.style.top = `${Math.round(rect.bottom + 6)}px`;
+        node.style.right = `${Math.max(8, Math.round(window.innerWidth - rect.right))}px`;
+        button.setAttribute('aria-expanded', 'true');
+        openMenu = { node, button };
+    }
+
+    function menuItem(label, checked, onClick, count) {
+        const item = el('button', 'jf-menu-item');
+        item.type = 'button';
+        item.setAttribute('role', 'menuitemradio');
+        item.setAttribute('aria-checked', checked ? 'true' : 'false');
+        item.append(el('span', 'jf-menu-check', checked ? '✓' : ''), el('span', 'jf-menu-label', label));
+        if (count != null) item.append(el('span', 'jf-menu-count', Number(count).toLocaleString()));
+        item.addEventListener('click', () => { closeMenu(); onClick(); updateToolbar(); });
+        return item;
+    }
+
+    function openSortMenu(button) {
+        showMenu(button, node => {
+            const now = currentSort();
+            for (const option of SORT_OPTIONS) {
+                node.appendChild(menuItem(option.label,
+                    now.method === option.method && now.direction === option.direction,
+                    () => applySort(option)));
+            }
+        });
+    }
+
+    function openFilterMenu(button) {
+        showMenu(button, node => {
+            const genres = (typeof allGenres === 'object' && allGenres && allGenres[activeTab()]) || {};
+            const names = Object.keys(genres).sort((a, b) => nameCollator.compare(a, b));
+            node.appendChild(menuItem('All genres', activeGenre() === 'all',
+                () => typeof setGenreFilter === 'function' && setGenreFilter('all')));
+            if (!names.length) node.appendChild(el('div', 'jf-menu-empty', 'Genres are still loading…'));
+            for (const name of names) {
+                node.appendChild(menuItem(name, activeGenre() === name,
+                    () => typeof setGenreFilter === 'function' && setGenreFilter(name), genres[name]));
+            }
+            node.classList.add('jf-menu-scroll');
+        });
+    }
+
+    function toolButton(name, title, iconClass, onClick) {
+        const button = el('button', 'jf-tool');
+        button.type = 'button';
+        button.title = title;
+        button.setAttribute('aria-label', title);
+        button.setAttribute('aria-haspopup', 'menu');
+        button.setAttribute('aria-expanded', 'false');
+        button.dataset.tool = name;
+        button.appendChild(el('span', `jf-ico ${iconClass}`));
+        button.addEventListener('click', event => { event.stopPropagation(); onClick(button); });
+        return button;
+    }
+
+    function updateToolbar() {
+        if (!toolbar) return;
+        const genre = activeGenre();
+        const chip = toolbar.querySelector('.jf-tool-chip');
+        const filter = toolbar.querySelector('[data-tool="filter"]');
+        chip.hidden = genre === 'all';
+        chip.replaceChildren();
+        if (genre !== 'all') {
+            chip.append(el('span', '', genre));
+            const clear = el('button', 'jf-chip-clear', '×');
+            clear.type = 'button';
+            clear.setAttribute('aria-label', 'Clear genre filter');
+            clear.addEventListener('click', event => {
+                event.stopPropagation();
+                if (typeof setGenreFilter === 'function') setGenreFilter('all');
+                updateToolbar();
+            });
+            chip.appendChild(clear);
+        }
+        filter.classList.toggle('active', genre !== 'all');
+    }
+
+    function buildToolbar() {
+        const content = document.querySelector('.header-content');
+        if (!content) return;
+        toolbar = el('div', 'jf-toolbar');
+        const chip = el('span', 'jf-tool-chip');
+        chip.hidden = true;
+        toolbar.append(
+            chip,
+            toolButton('filter', 'Filter by genre', 'jf-ico-filter', openFilterMenu),
+            toolButton('sort', 'Sort', 'jf-ico-sort', openSortMenu)
+        );
+        content.appendChild(toolbar);
+        document.addEventListener('click', closeMenu);
+        document.addEventListener('keydown', event => {
+            if (event.key === 'Escape' && openMenu) {
+                const button = openMenu.button;
+                closeMenu();
+                button.focus();
+            }
+        });
+        window.addEventListener('resize', closeMenu);
+        // Tab switches can clear currentGenre without changing the body class
+        // (for example after Date sort removed sort-by-genre). Update after the
+        // existing tab click handler has run, even when no class changes.
+        document.addEventListener('click', event => {
+            if (event.target.closest('.tab')) queueMicrotask(updateToolbar);
+        });
+        new MutationObserver(updateToolbar).observe(document.body, { attributes: true, attributeFilter: ['class'] });
+        updateToolbar();
+    }
 
     // ---------------------------------------------------------------- Live TV
     // Browse-only list of Jellyfin Live TV channels with what is on now. The
@@ -344,6 +509,7 @@
 
     function openLive() {
         if (!liveAvailable || live.open) return;
+        closeMenu();
         if (!livePanel) buildLivePanel();
         live.open = true;
         live.query = '';
@@ -424,6 +590,7 @@
     function init() {
         buildTitle();
         buildDrawer();
+        buildToolbar();
         addLiveEntryPoints();
         probeLive();
         pollCounts();
@@ -436,7 +603,7 @@
         document.addEventListener('keydown', event => {
             if (event.key === 'Escape' && live.open && !document.querySelector('.modal-overlay.active')) closeLive();
         });
-        window.addEventListener('bg:library-state', renderDrawer);
+        window.addEventListener('bg:library-state', () => { renderDrawer(); updateToolbar(); });
         const tabs = document.querySelector('.header .tabs');
         if (tabs) {
             new MutationObserver(renderDrawer).observe(tabs, {
