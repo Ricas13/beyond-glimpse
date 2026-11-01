@@ -85,9 +85,11 @@ class JellyfinUiAssetTests(unittest.TestCase):
             output = subprocess.run(["node", "-e", code], capture_output=True,
                                     text=True, check=True).stdout
             ordered = json.loads(output)
-            self.assertEqual([item["name"] for item in ordered[:10]], expected, filename)
-            self.assertCountEqual([item["name"] for item in ordered[10:]],
+            # Unprefixed libraries come first (in either order), then "_" libraries,
+            # then "__" and deeper, as requested for the drawer.
+            self.assertCountEqual([item["name"] for item in ordered[:2]],
                                   ["In Cinemas", "日本語"], filename)
+            self.assertEqual([item["name"] for item in ordered[2:]], expected, filename)
             # Two identically named libraries retain their original stable order.
             self.assertEqual([item["id"] for item in ordered
                               if item["name"] == "_Movies"], ["5", "11"], filename)
