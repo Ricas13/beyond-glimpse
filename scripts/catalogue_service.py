@@ -87,28 +87,68 @@ def present_season_ids(client, user_id, season_ids, workers=8):
     if not ids:
         return set()
 
-    def probe(season_id):
-        try:
-            data = client.get_json(
-                "/Items",
-                params={
-                    "ParentId": season_id,
-                    "Recursive": "false",
-                    "IncludeItemTypes": "Episode",
-                    "Limit": 5,
-                    "EnableTotalRecordCount": "false",
-                    "EnableUserData": "false",
-                    "EnableImages": "false",
-                    "UserId": user_id,
-                },
-            )
-        except requests.RequestException:
-            return season_id, True
-        # Looked up at call time so the present-only policy's filter applies.
-        return season_id, any(episode_from_api(item) is not None for item in data.get("Items") or [])
+    # requests.Session is not guaranteed thread-safe. Each pool thread gets its
+    # own JellyfinClient/session; the present-only get_json wrapper still applies.
+    # Lightweight fake clients in the unit tests can be passed through unchanged.
+    worker_local = threading.local()
+    worker_clients = []
+    worker_clients_lock = threading.Lock()
 
-    with ThreadPoolExecutor(max_workers=min(workers, len(ids))) as pool:
-        return {season_id for season_id, present in pool.map(probe, ids) if present}
+    def probe_client():
+        if not isinstance(client, JellyfinClient):
+            return client
+        local = getattr(worker_local, "client", None)
+        if local is None:
+            local = JellyfinClient(url=client.url, token=client.token, timeout=client.timeout)
+            worker_local.client = local
+            with worker_clients_lock:
+                worker_clients.append(local)
+        return local
+
+    def probe(season_id):
+        local = probe_client()
+        offset = 0
+        # With an older Jellyfin build, ExcludeLocationTypes can be ignored.
+        # Check further small pages when the first five are only placeholders.
+        # After four full pages we cannot prove absence: keep the season rather
+        # than incorrectly hiding real episodes beyond this bounded scan.
+        for _ in range(4):
+            try:
+                data = local.get_json(
+                    "/Items",
+                    params={
+                        "ParentId": season_id,
+                        "Recursive": "false",
+                        "IncludeItemTypes": "Episode",
+                        "StartIndex": offset,
+                        "Limit": 5,
+                        "EnableTotalRecordCount": "false",
+                        "EnableUserData": "false",
+                        "EnableImages": "false",
+                        "UserId": user_id,
+                    },
+                )
+                if not isinstance(data, dict) or not isinstance(data.get("Items"), list):
+                    return season_id, True
+                items = data["Items"]
+                # Looked up at call time so the present-only filter applies.
+                if any(episode_from_api(item) is not None for item in items):
+                    return season_id, True
+            except (requests.RequestException, ValueError, TypeError, KeyError, AttributeError):
+                # An invalid season id or a failed/malformed response is unknown,
+                # not evidence that the season has no available episodes.
+                return season_id, True
+            if len(items) < 5:
+                return season_id, False
+            offset += len(items)
+        return season_id, True
+
+    try:
+        with ThreadPoolExecutor(max_workers=max(1, min(8, workers, len(ids)))) as pool:
+            return {season_id for season_id, present in pool.map(probe, ids) if present}
+    finally:
+        for local in worker_clients:
+            local.session.close()
 
 
 def season_sort_key(season):
