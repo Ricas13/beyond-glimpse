@@ -48,7 +48,7 @@ class LibraryListFirstRunTests(unittest.TestCase):
         sent = {}
         fake = SimpleNamespace(
             media_type=service.CatalogueHandler.media_type,
-            cached_libraries=lambda: live,
+            cached_libraries=lambda: (_ for _ in ()).throw(live) if isinstance(live, Exception) else live,
             send_json=lambda status, payload, cache_control="no-store": sent.update(
                 status=status, payload=payload, cache_control=cache_control
             ),
@@ -71,6 +71,25 @@ class LibraryListFirstRunTests(unittest.TestCase):
             [(lib["name"], lib["count"]) for lib in sent["payload"]["libraries"]], [("Movies", 1)]
         )
         self.assertEqual(sent["cache_control"], "no-store")
+
+    def test_failed_live_lookup_is_not_an_api_500(self):
+        _, path = self.make_db()
+        for error in (RuntimeError("bad Jellyfin response"), ValueError("invalid JSON")):
+            sent = self.call_handle_libraries(path, error)
+            self.assertEqual(sent["status"], 200)
+            self.assertEqual(sent["payload"]["libraries"], [])
+            self.assertEqual(sent["cache_control"], "no-store")
+
+    def test_malformed_library_rows_are_ignored_and_only_public_fields_emitted(self):
+        _, path = self.make_db()
+        sent = self.call_handle_libraries(path, [
+            None, "bad", {"media_type": "movie", "id": "lib1", "name": "Public", "token": "secret"}
+        ])
+        self.assertEqual(sent["status"], 200)
+        self.assertEqual(sent["payload"]["libraries"], [
+            {"id": "lib1", "name": "Public", "type": "movie", "count": 0}
+        ])
+        self.assertNotIn("secret", str(sent))
 
     def test_settled_catalogue_uses_stored_list_and_caches(self):
         connection, path = self.make_db()
