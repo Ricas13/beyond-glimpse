@@ -825,12 +825,20 @@ class CatalogueHandler(BaseHTTPRequestHandler):
                 cls.channel_cache = {"fetched_at": now, "channels": channels, "available": bool(channels)}
             except (requests.RequestException, RuntimeError, ValueError, TypeError, AttributeError, KeyError) as exc:
                 print(f"catalogue-api live TV channels unavailable: {exc}", flush=True)
-                # Keep any previous good list; otherwise remember the miss briefly.
-                cls.channel_cache = {
-                    "fetched_at": now,
-                    "channels": cache["channels"],
-                    "available": cache["available"],
-                }
+                # Authentication/access loss or removal of Live TV must revoke
+                # publicly cached listings instead of exposing the last good one.
+                status = (exc.response.status_code
+                          if isinstance(exc, requests.HTTPError) and exc.response is not None
+                          else None)
+                if status in {401, 403, 404}:
+                    cls.channel_cache = {"fetched_at": now, "channels": [], "available": False}
+                else:
+                    # Transient upstream failures retain the previous good list.
+                    cls.channel_cache = {
+                        "fetched_at": now,
+                        "channels": cache["channels"],
+                        "available": cache["available"],
+                    }
             return cls.channel_cache
         finally:
             cls.channel_lock.release()
