@@ -26,6 +26,8 @@ OLD_SCRIPT_TAGS = (
 LIBRARY_BROWSE_TAG = '    <script src="/library-browse.js?v=1"></script>'
 TV_EPISODES_TAG = '    <script src="/tv-episodes.js?v=1"></script>'
 STARTUP_STATUS_TAG = '    <script src="/startup-status.js?v=3"></script>'
+JELLYFIN_UI_TAG = '    <script src="/jellyfin-ui.js?v=1"></script>'
+JELLYFIN_UI_CSS = '    <link rel="stylesheet" href="/jellyfin-ui.css?v=1">'
 OLD_STARTUP_TAGS = (
     '    <script src="/startup-status.js?v=1"></script>',
     '    <script src="/startup-status.js?v=2"></script>',
@@ -38,8 +40,9 @@ OLD_STARTUP_TAGS = (
 # broken pages can have these tags embedded in the middle of that comment, so
 # this deliberately does not anchor the match to a line boundary.
 RUNTIME_TAG_RE = re.compile(
-    r'[ \t]*<script src="/(?:large-library\.js\?v=\d+|library-browse\.js\?v=\d+|tv-episodes\.js\?v=\d+|startup-status\.js\?v=\d+)"></script>[ \t]*(?:\r?\n)?'
+    r'[ \t]*<script src="/(?:large-library\.js\?v=\d+|library-browse\.js\?v=\d+|tv-episodes\.js\?v=\d+|startup-status\.js\?v=\d+|jellyfin-ui\.js\?v=\d+)"></script>[ \t]*(?:\r?\n)?'
 )
+CSS_TAG_RE = re.compile(r'[ \t]*<link rel="stylesheet" href="/jellyfin-ui\.css\?v=\d+">[ \t]*(?:\r?\n)?')
 
 # v2.0.1 briefly used an inline function-toString shim. Remove it during
 # upgrades; v2.0.2+ detects the primary server directly from the themed title.
@@ -127,8 +130,17 @@ def place_runtime_tags(source: str) -> str:
     after = source[body_close:]
     return (
         f"{before}\n\n{SCRIPT_TAG}\n{LIBRARY_BROWSE_TAG}\n"
-        f"{TV_EPISODES_TAG}\n{STARTUP_STATUS_TAG}\n{after}"
+        f"{TV_EPISODES_TAG}\n{STARTUP_STATUS_TAG}\n{JELLYFIN_UI_TAG}\n{after}"
     )
+
+
+def place_stylesheet(source: str) -> str:
+    """Put the Jellyfin UI stylesheet last in <head> so it follows the inline theme."""
+    source = CSS_TAG_RE.sub("", source)
+    head_close = source.find("</head>")
+    if head_close < 0:
+        raise RuntimeError("Could not find </head> in Glimpse index")
+    return f"{source[:head_close].rstrip()}\n{JELLYFIN_UI_CSS}\n{source[head_close:]}"
 
 
 def prepare(path: Path) -> bool:
@@ -146,6 +158,7 @@ def prepare(path: Path) -> bool:
     # v2.0.2 pages where the tags were accidentally injected into Glimpse's
     # comment that mentions the literal text "</body>".
     source = place_runtime_tags(source)
+    source = place_stylesheet(source)
 
     changed = source != original
     if changed:

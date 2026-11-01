@@ -1,0 +1,545 @@
+/*
+ * Beyond Glimpse - Jellyfin-style interface.
+ *
+ * Everything is scoped under html.jf-ui, which the entrypoint adds for Jellyfin
+ * pages, so Plex/Emby themes are untouched. The markup and JS hooks of index.html
+ * are unchanged; this sheet restyles them (and jellyfin-ui.js adds the drawer).
+ * It is an approximation of Jellyfin's default dark theme, not a copy.
+ */
+
+html.jf-ui {
+    --jf-accent: #00a4dc;
+    --jf-accent-hover: #0288c2;
+    --jf-bg: #101010;
+    --jf-surface: #202020;
+    --jf-surface-2: #292929;
+    --jf-text: #ffffff;
+    --jf-text-dim: rgba(255, 255, 255, 0.6);
+    --jf-hover: rgba(255, 255, 255, 0.08);
+    --jf-drawer-w: 15rem;
+    --jf-topbar-h: 3.5rem;
+    --jf-tabs-h: 3rem;
+    --primary-color: var(--jf-accent);
+    --primary-hover: var(--jf-accent-hover);
+    --bg-color: var(--jf-bg);
+    --secondary-bg: var(--jf-surface);
+    --header-bg: var(--jf-surface);
+    --tab-bg: var(--jf-surface-2);
+    --poster-width: 170px;
+    --header-height: calc(var(--jf-topbar-h) + var(--jf-tabs-h));
+    color-scheme: dark;
+}
+
+html.jf-ui body {
+    background: var(--jf-bg) !important;
+    font-family: "Noto Sans", "Open Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+    color: var(--jf-text);
+}
+
+/* ---------- Icons (inline SVG, no font downloads: CSP allows data: images) ---------- */
+html.jf-ui .jf-ico {
+    display: inline-block;
+    width: 1.5rem;
+    height: 1.5rem;
+    flex: 0 0 auto;
+    background-color: currentColor;
+    -webkit-mask: var(--jf-ico) center / contain no-repeat;
+    mask: var(--jf-ico) center / contain no-repeat;
+}
+html.jf-ui .jf-ico-movie { --jf-ico: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M18 4l2 4h-3l-2-4h-2l2 4h-3l-2-4H8l2 4H7L5 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V4h-4z'/%3E%3C/svg%3E"); }
+html.jf-ui .jf-ico-tv { --jf-ico: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M21 3H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h5v2h8v-2h5c1.1 0 1.99-.9 1.99-2L23 5c0-1.1-.9-2-2-2zm0 14H3V5h18v12z'/%3E%3C/svg%3E"); }
+html.jf-ui .jf-ico-folder { --jf-ico: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z'/%3E%3C/svg%3E"); }
+
+/* ---------- Navigation drawer (built by jellyfin-ui.js, wide screens only) ---------- */
+html.jf-ui .jf-drawer,
+html.jf-ui .jf-page-title { display: none; }
+
+/* ---------- Header / top bar ---------- */
+html.jf-ui .header {
+    background: var(--jf-surface);
+    box-shadow: none;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+}
+html.jf-ui .header h1 {
+    color: var(--jf-text);
+    font-size: 1.25rem;
+    font-weight: 500;
+    letter-spacing: 0;
+}
+html.jf-ui .logo-icon img { height: 1.9rem; width: auto; }
+
+/* Search: a flat rounded field with a leading magnifier, like Jellyfin's search page. */
+html.jf-ui .search-container { max-width: 32rem; }
+html.jf-ui .search-input {
+    border-radius: 4px;
+    background-color: var(--jf-surface-2);
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23aaaaaa'%3E%3Cpath d='M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: 0.6rem center;
+    background-size: 1.35rem;
+    padding: 0.6rem 2.2rem 0.6rem 2.4rem;
+    box-shadow: none;
+    font-size: 0.95rem;
+}
+html.jf-ui .search-input:focus {
+    background-color: #333 !important;
+    box-shadow: 0 0 0 2px var(--jf-accent) !important;
+}
+
+/* Tabs: uppercase labels with an accent underline on the active one. */
+html.jf-ui .tab,
+html.jf-ui .tab:hover:not(.active) {
+    background: transparent !important;
+    background-image: none !important;
+    border-radius: 0;
+    box-shadow: none;
+    color: var(--jf-text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+    font-size: 0.85rem;
+    font-weight: 500;
+    padding: 0 1.25rem;
+}
+html.jf-ui .tab:hover:not(.active) { color: var(--jf-text); background: var(--jf-hover) !important; }
+html.jf-ui .tab.active {
+    background: transparent !important;
+    background-image: none !important;
+    color: var(--jf-text) !important;
+    font-weight: 600;
+    box-shadow: inset 0 -3px 0 var(--jf-accent);
+}
+
+/* Sort / genre controls become flat toolbar buttons. */
+html.jf-ui .sort-button,
+html.jf-ui .genre-button,
+html.jf-ui .server-toggle-button {
+    background: transparent !important;
+    background-image: none !important;
+    border-radius: 4px;
+    color: var(--jf-text-dim) !important;
+    font-size: 0.8rem;
+    font-weight: 500;
+}
+html.jf-ui .sort-button:hover:not(.active),
+html.jf-ui .genre-button:hover:not(.active),
+html.jf-ui .server-toggle-button:hover { background: var(--jf-hover) !important; color: var(--jf-text) !important; }
+html.jf-ui .sort-button.active,
+html.jf-ui .genre-button.active { color: var(--jf-accent) !important; font-weight: 600; }
+html.jf-ui .genre-menu,
+html.jf-ui .bg-library-menu {
+    background: var(--jf-surface);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 4px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+}
+html.jf-ui .genre-item:hover,
+html.jf-ui .bg-library-option:hover { background: var(--jf-hover); }
+html.jf-ui .genre-item.active,
+html.jf-ui .bg-library-option.active { background: rgba(0, 164, 220, 0.15) !important; color: var(--jf-accent) !important; }
+html.jf-ui .genre-badge { background: var(--jf-surface-2) !important; color: var(--jf-text-dim) !important; }
+html.jf-ui .bg-library-arrow { background: transparent; border-radius: 0; color: var(--jf-text-dim); min-width: 1.6rem; padding: 0 0.3rem; }
+html.jf-ui .bg-library-arrow:hover,
+html.jf-ui .bg-library-arrow[aria-expanded="true"] { background: var(--jf-hover); }
+html.jf-ui .bg-library-arrow.has-filter { background: transparent; color: var(--jf-accent); }
+
+/* ---------- Desktop: two-row app bar (title/search, then tab strip) ---------- */
+@media screen and (min-width: 769px) {
+    html.jf-ui .header { height: var(--header-height); }
+    html.jf-ui .header-content {
+        position: relative;
+        flex-wrap: wrap;
+        align-content: flex-start;
+        justify-content: center;
+        gap: 0 1rem;
+        padding: 0 1rem;
+    }
+    /* Row 1 */
+    html.jf-ui .logo-section { order: 1; height: var(--jf-topbar-h); }
+    html.jf-ui .search-box { order: 2; height: var(--jf-topbar-h); align-items: center; justify-content: flex-end; }
+    html.jf-ui .mobile-menu-button { order: 3; }
+    /* Row break, then row 2: the tab strip is promoted into the header flow. */
+    html.jf-ui .header-content > .tabs { display: contents; }
+    html.jf-ui .header-content > .tabs::before { content: ""; order: 4; flex: 0 0 100%; height: 0; }
+    html.jf-ui .header-content > .tabs > .tab,
+    html.jf-ui .header-content > .tabs > .bg-library-tab-wrap { order: 5; height: var(--jf-tabs-h); }
+    html.jf-ui .header-content .tab { display: flex; align-items: center; }
+    html.jf-ui .bg-library-tab-wrap { align-items: stretch; }
+    html.jf-ui .bg-library-tab-wrap > .tab { border-radius: 0; margin-right: 0; }
+    html.jf-ui .bg-library-menu { top: calc(100% - 4px); }
+    html.jf-ui .header-content > .tabs > .sort-toggle {
+        position: absolute;
+        right: 1rem;
+        top: var(--jf-topbar-h);
+        height: var(--jf-tabs-h);
+        margin: 0;
+        gap: 0.25rem;
+    }
+    html.jf-ui .container { max-width: none; padding: 0 1.5rem; }
+}
+
+/* ---------- Wide desktop: docked drawer, header shifts right ---------- */
+@media screen and (min-width: 1100px) {
+    html.jf-ui .jf-drawer {
+        display: flex;
+        flex-direction: column;
+        position: fixed;
+        top: 0;
+        bottom: 0;
+        left: 0;
+        width: var(--jf-drawer-w);
+        background: var(--jf-surface);
+        border-right: 1px solid rgba(255, 255, 255, 0.04);
+        z-index: 110;
+    }
+    html.jf-ui .jf-drawer-brand {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        height: var(--jf-topbar-h);
+        padding: 0 1rem;
+        font-size: 1.25rem;
+        font-weight: 500;
+        color: var(--jf-text);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    }
+    html.jf-ui .jf-drawer-brand img { height: 1.9rem; width: auto; }
+    html.jf-ui .jf-drawer-scroll { flex: 1; overflow-y: auto; padding: 0.5rem 0 1rem; }
+    html.jf-ui .jf-nav-heading {
+        padding: 1.1rem 1.25rem 0.4rem;
+        font-size: 0.8rem;
+        font-weight: 500;
+        color: var(--jf-text-dim);
+    }
+    html.jf-ui .jf-nav-item {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        width: calc(100% - 1rem);
+        margin: 0 0.5rem;
+        padding: 0.7rem 0.75rem;
+        border: 0;
+        border-radius: 4px;
+        background: transparent;
+        color: var(--jf-text);
+        font: inherit;
+        font-size: 0.95rem;
+        text-align: left;
+        cursor: pointer;
+    }
+    html.jf-ui .jf-nav-item:hover { background: var(--jf-hover); }
+    html.jf-ui .jf-nav-item.active { background: rgba(255, 255, 255, 0.1); color: var(--jf-accent); }
+    html.jf-ui .jf-nav-item .jf-nav-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    html.jf-ui .jf-nav-item .jf-nav-count { font-size: 0.78rem; color: var(--jf-text-dim); }
+
+    html.jf-ui .header { left: var(--jf-drawer-w); }
+    html.jf-ui .container { margin-left: var(--jf-drawer-w); }
+    /* The brand lives in the drawer; the top bar shows the current page instead. */
+    html.jf-ui .logo-section { display: none; }
+    html.jf-ui .jf-page-title {
+        display: flex;
+        align-items: center;
+        order: 1;
+        height: var(--jf-topbar-h);
+        margin-right: auto;
+        font-size: 1.25rem;
+        font-weight: 500;
+        color: var(--jf-text);
+    }
+    html.jf-ui .search-box { flex: 0 1 32rem; }
+    /* Library choice moves into the drawer. */
+    html.jf-ui .bg-library-arrow { display: none; }
+    html.jf-ui .bg-library-tab-wrap > .tab { border-radius: 0; }
+}
+
+/* ---------- Poster cards ---------- */
+html.jf-ui .media-grid {
+    grid-template-columns: repeat(auto-fill, minmax(var(--poster-width), 1fr));
+    gap: 1.6rem 1rem;
+    padding: 1.25rem 0;
+}
+html.jf-ui .media-item,
+html.jf-ui .media-item:hover {
+    background: transparent !important;
+    box-shadow: none !important;
+    border-radius: 0;
+    overflow: visible;
+    transform: none;
+}
+html.jf-ui .poster-container {
+    border-radius: 4px;
+    background: #1c1c1c;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+}
+html.jf-ui .poster-placeholder { background: #1c1c1c; }
+/* Hover: dim the image and show a centred round button (opens the details page). */
+html.jf-ui .poster-container::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    opacity: 0;
+    transition: opacity 0.15s ease;
+    pointer-events: none;
+}
+html.jf-ui .poster-container::before {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 3.2rem;
+    height: 3.2rem;
+    margin: -1.6rem 0 0 -1.6rem;
+    border-radius: 50%;
+    background: var(--jf-accent) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='white'%3E%3Cpath d='M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z'/%3E%3C/svg%3E") center / 62% no-repeat;
+    opacity: 0;
+    transform: scale(0.85);
+    transition: opacity 0.15s ease, transform 0.15s ease;
+    z-index: 2;
+    pointer-events: none;
+}
+html.jf-ui .media-item:hover .poster-container::after { opacity: 1; }
+html.jf-ui .media-item:hover .poster-container::before { opacity: 1; transform: scale(1); }
+html.jf-ui .media-info { padding: 0.5rem 0.1rem 0; }
+html.jf-ui .media-title { font-size: 0.9rem; font-weight: 400; margin: 0; color: var(--jf-text); }
+html.jf-ui .media-title:hover { color: var(--jf-text); }
+html.jf-ui .media-year,
+html.jf-ui .media-added { font-size: 0.8rem; color: var(--jf-text-dim); margin-top: 0.1rem; }
+html.jf-ui .text-placeholder {
+    border: 0 !important;
+    background: linear-gradient(160deg, #262626, #171717);
+    color: var(--jf-text-dim) !important;
+}
+html.jf-ui .loading { color: var(--jf-text-dim); }
+html.jf-ui .loading-spinner { border-color: rgba(0, 164, 220, 0.2) !important; border-top-color: var(--jf-accent) !important; }
+html.jf-ui .no-results-title { color: var(--jf-text); font-weight: 400; }
+html.jf-ui .scroll-to-top { background: var(--jf-accent) !important; border-radius: 50%; }
+
+/* ---------- Item details page (replaces the centred modal) ---------- */
+html.jf-ui .modal-overlay {
+    background: var(--jf-bg);
+    padding: 0;
+    align-items: flex-start;
+    justify-content: stretch;
+    overflow-x: hidden;
+}
+@media screen and (min-width: 1100px) {
+    html.jf-ui .modal-overlay { left: var(--jf-drawer-w); width: calc(100% - var(--jf-drawer-w)); }
+}
+html.jf-ui .modal-content {
+    max-width: none;
+    width: 100%;
+    min-height: 100%;
+    max-height: none;
+    margin: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    transform: none;
+    overflow: visible;
+    clip-path: inset(0);
+}
+/* The blurred poster stands in for a backdrop (jellyfin-ui.js sets it). */
+html.jf-ui .modal-backdrop {
+    height: 75vh;
+    opacity: 0.5;
+    filter: blur(28px) saturate(1.1);
+    transform: scale(1.15);
+    transform-origin: top center;
+}
+html.jf-ui .modal-backdrop::after {
+    background: linear-gradient(to bottom, rgba(16, 16, 16, 0.2) 0%, var(--jf-bg) 100%);
+}
+html.jf-ui .backdrop-text-placeholder { display: none; }
+html.jf-ui .modal-close {
+    left: 0.75rem;
+    right: auto;
+    top: 0.75rem;
+    width: 2.75rem;
+    height: 2.75rem;
+    font-size: 0;
+    background: rgba(0, 0, 0, 0.35) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='white'%3E%3Cpath d='M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z'/%3E%3C/svg%3E") center / 58% no-repeat;
+}
+html.jf-ui .modal-close:hover { background-color: rgba(255, 255, 255, 0.15); }
+html.jf-ui .modal-header {
+    align-items: flex-start;
+    gap: 0;
+    margin-top: 0;
+    padding: 5rem 2rem 1.5rem;
+    border-bottom: 0;
+}
+html.jf-ui .modal-poster {
+    width: clamp(170px, 22vw, 300px);
+    margin-right: 2.5rem;
+    border-radius: 4px;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.6);
+}
+html.jf-ui .modal-title-section {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    align-content: flex-start;
+    column-gap: 0.9rem;
+    padding-top: 0.5rem;
+    min-width: 0;
+}
+html.jf-ui .modal-title {
+    flex: 0 0 100%;
+    margin: 0 0 0.6rem;
+    font-size: 2.1rem;
+    font-weight: 400;
+    line-height: 1.2;
+}
+html.jf-ui .modal-year { margin: 0; font-size: 1rem; color: var(--jf-text); font-weight: 400; }
+html.jf-ui .modal-metadata { display: contents; }
+html.jf-ui .metadata-item {
+    padding: 0;
+    background: transparent;
+    border-radius: 0;
+    font-size: 1rem;
+    font-weight: 400;
+    color: var(--jf-text);
+}
+html.jf-ui #modal-rating {
+    padding: 0 0.4rem;
+    border: 1px solid rgba(255, 255, 255, 0.55);
+    border-radius: 2px;
+    font-size: 0.85rem;
+    line-height: 1.5;
+}
+html.jf-ui .modal-body {
+    max-height: none;
+    overflow: visible;
+    padding: 0 2rem 3rem;
+    gap: 1.6rem;
+}
+html.jf-ui .modal-section-title { color: var(--jf-text); font-size: 1.4rem; font-weight: 400; margin-bottom: 0.8rem; }
+html.jf-ui .summary-section .modal-section-title { display: none; }
+html.jf-ui .summary-section { max-width: 60rem; font-size: 1.05rem; line-height: 1.6; }
+/* Genres read as a plain "Genres: A, B" line. */
+html.jf-ui .modal-section:has(#modal-genres) { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 0.6rem; }
+html.jf-ui .modal-section:has(#modal-genres) .modal-section-title { font-size: 1rem; color: var(--jf-text-dim); margin: 0; }
+html.jf-ui .modal-section:has(#modal-genres) .modal-section-title::after { content: ":"; }
+html.jf-ui .genres-list { gap: 0; }
+html.jf-ui .genre-tag {
+    background: transparent !important;
+    padding: 0;
+    border-radius: 0;
+    color: var(--jf-text) !important;
+    font-size: 1rem;
+    font-weight: 400;
+    cursor: pointer;
+}
+html.jf-ui .genre-tag:not(:last-child)::after { content: ",\00a0"; color: var(--jf-text-dim); }
+html.jf-ui .genre-tag:hover { color: var(--jf-accent) !important; text-decoration: underline; }
+/* Cast: a horizontal strip of round portraits (initials; no photos are stored). */
+html.jf-ui .cast-grid { display: flex; gap: 1.1rem; overflow-x: auto; padding-bottom: 0.6rem; }
+html.jf-ui .cast-item { flex: 0 0 8rem; background: transparent; padding: 0; text-align: center; }
+html.jf-ui .jf-avatar {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 7rem;
+    height: 7rem;
+    margin: 0 auto 0.6rem;
+    border-radius: 50%;
+    background: linear-gradient(160deg, #2c2c2c, #1b1b1b);
+    color: var(--jf-text-dim);
+    font-size: 2rem;
+    font-weight: 300;
+}
+html.jf-ui .cast-name { font-size: 0.9rem; font-weight: 400; }
+html.jf-ui .cast-role { font-size: 0.8rem; color: var(--jf-text-dim); }
+/* Episode browser (tv-episodes.js) */
+html.jf-ui .bg-episode-browser { border-top-color: rgba(255, 255, 255, 0.08); }
+html.jf-ui .bg-episode-title { font-weight: 400; font-size: 1.4rem; }
+html.jf-ui .bg-season-tab { border-radius: 4px; }
+html.jf-ui .bg-season-tab.active { background: var(--jf-accent); border-color: var(--jf-accent); color: #fff; }
+
+/* ---------- Mobile menu & genre drawer ---------- */
+html.jf-ui .mobile-menu,
+html.jf-ui .genre-drawer { background: var(--jf-surface); }
+html.jf-ui .mobile-menu .tab { text-align: left; box-shadow: none; }
+html.jf-ui .mobile-menu .tab.active { box-shadow: inset 3px 0 0 var(--jf-accent); background: var(--jf-hover) !important; }
+
+@media screen and (max-width: 768px) {
+    html.jf-ui .header h1 { font-size: 1.05rem; }
+    html.jf-ui .logo-icon { margin-right: 4px; }
+    html.jf-ui .logo-icon img { height: 1.6rem; }
+    html.jf-ui .header-content { gap: 0.5rem; padding: 0 0.75rem; }
+    html.jf-ui .media-grid { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 1.2rem 0.7rem; }
+    html.jf-ui .modal-header { flex-direction: column; align-items: center; padding: 4.5rem 1rem 1rem; }
+    html.jf-ui .modal-poster { width: 45vw; margin: 0 0 1rem; }
+    html.jf-ui .modal-title-section { justify-content: center; text-align: center; }
+    html.jf-ui .modal-body { padding: 0 1rem 2rem; }
+}
+
+/* ======================= Second pass ======================= */
+
+/* Neutral scrollbars (Jellyfin's are grey, not accent-coloured). */
+html.jf-ui * { scrollbar-color: rgba(255, 255, 255, 0.28) transparent; }
+html.jf-ui ::-webkit-scrollbar-track { background: transparent; }
+html.jf-ui ::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.28);
+    border: 2px solid transparent;
+    background-clip: padding-box;
+}
+html.jf-ui ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.45); background-clip: padding-box; }
+
+/* Library grids centre the title and year under each poster. */
+html.jf-ui .media-info { text-align: center; }
+
+/* Details-page action row sits under the metadata line; buttons are flat rectangles. */
+html.jf-ui .modal-actions { flex: 0 0 100%; margin-top: 1.1rem; gap: 0.6rem; }
+html.jf-ui .watch-trailer-btn {
+    background: var(--jf-accent) !important;
+    background-image: none !important;
+    color: #fff !important;
+    border-radius: 4px;
+    padding: 0.55rem 1.1rem;
+    font-weight: 500;
+    font-size: 0.95rem;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+}
+html.jf-ui .watch-trailer-btn:hover { background: var(--jf-accent-hover) !important; }
+html.jf-ui .roulette-button {
+    background: var(--jf-surface-2);
+    color: var(--jf-text);
+    border: 0;
+    border-radius: 4px;
+    box-shadow: none;
+}
+html.jf-ui .roulette-button:hover { background: #343434 !important; }
+
+/* Episode list: flat rows like Jellyfin's episode list, no boxed table or header. */
+html.jf-ui .bg-episode-browser { margin-top: 0.5rem; padding-top: 0.5rem; border-top: 0; }
+html.jf-ui .bg-episode-heading { margin-bottom: 0.4rem; }
+html.jf-ui .bg-season-tabs { gap: 0; padding: 0; margin-bottom: 0.6rem; border-bottom: 1px solid rgba(255, 255, 255, 0.08); }
+html.jf-ui .bg-season-tab {
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    color: var(--jf-text-dim);
+    padding: 0.7rem 1.1rem;
+    text-transform: uppercase;
+    font-size: 0.8rem;
+    letter-spacing: 0.02em;
+}
+html.jf-ui .bg-season-tab:hover { background: var(--jf-hover); color: var(--jf-text); }
+html.jf-ui .bg-season-tab.active { background: transparent; color: var(--jf-text); box-shadow: inset 0 -3px 0 var(--jf-accent); }
+html.jf-ui .bg-episode-table-wrap { border: 0; background: transparent; border-radius: 0; }
+html.jf-ui .bg-episode-table { font-size: 1rem; }
+html.jf-ui .bg-episode-table thead { display: none; }
+html.jf-ui .bg-episode-table td { padding: 0.9rem 0.6rem; border-bottom: 1px solid rgba(255, 255, 255, 0.07); }
+html.jf-ui .bg-episode-table tbody tr:hover { background: var(--jf-hover); }
+html.jf-ui .bg-episode-number { color: var(--jf-text-dim); font-size: 1.1rem; text-align: center; }
+html.jf-ui .bg-episode-name { font-weight: 400; font-size: 1rem; }
+html.jf-ui .bg-episode-overview { font-size: 0.88rem; color: var(--jf-text-dim); margin-top: 0.3rem; }
+html.jf-ui .bg-episode-date,
+html.jf-ui .bg-episode-runtime { font-size: 0.88rem; color: var(--jf-text-dim); text-align: right; }
+html.jf-ui .bg-episode-status { color: var(--jf-text-dim); }
+html.jf-ui .date-section { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 0.6rem; }
+html.jf-ui .date-section .modal-section-title { font-size: 1rem; color: var(--jf-text-dim); margin: 0; }
+html.jf-ui .date-section .modal-section-title::after { content: ":"; }

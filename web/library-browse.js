@@ -141,6 +141,15 @@
         document.head.appendChild(style);
     }
 
+    function announceState() {
+        window.dispatchEvent(new CustomEvent('bg:library-state'));
+    }
+
+    // Read-only view of the selection plus an entry point used by the
+    // Jellyfin-style navigation drawer (jellyfin-ui.js).
+    window.__beyondGlimpseLibraryState = { selected, libraryLists };
+    window.__beyondGlimpseSelectLibrary = (type, id, name) => selectLibrary(normalizeType(type), id || '', name || '');
+
     function closeMenus(exceptType = '') {
         for (const [type, control] of Object.entries(controls)) {
             if (type === exceptType) continue;
@@ -196,23 +205,26 @@
     }
 
     function selectLibrary(type, id, name) {
-        if (selected[type] === id) {
-            closeMenus();
-            return;
+        const changed = selected[type] !== id;
+        if (changed) {
+            selected[type] = id;
+            updateControl(type, name);
+            announceState();
         }
-        selected[type] = id;
-        updateControl(type, name);
         closeMenus();
 
         const targetTab = tabType(type);
         const activeTab = document.querySelector('.tab.active')?.dataset.content;
         if (activeTab !== targetTab && typeof switchTab === 'function') {
+            // Navigate even when the same library is already selected for the
+            // other tab; skipping this used to leave the user on the wrong page.
             switchTab(targetTab);
-        } else if (typeof filterAndSortMedia === 'function') {
+        } else if (changed && typeof filterAndSortMedia === 'function') {
             filterAndSortMedia(document.querySelector('.search-input')?.value || '');
         }
         // A library selection refreshes only its own lightweight SQL result set.
-        if (typeof window.__beyondGlimpseRefreshGenres === 'function') {
+        if ((changed || activeTab !== targetTab) &&
+            typeof window.__beyondGlimpseRefreshGenres === 'function') {
             window.__beyondGlimpseRefreshGenres();
         }
     }
@@ -228,6 +240,7 @@
             libraryLists[type] = [];
         }
         renderMenu(type);
+        announceState();
     }
 
     function decorate(type) {
@@ -270,6 +283,7 @@
             selected[type] = '';
             updateControl(type);
             closeMenus();
+            announceState();
         }, { capture: true });
     }
 
