@@ -231,6 +231,7 @@
     }
 
     async function loadLibraryList(type) {
+        let loaded = true;
         try {
             const response = await originalFetch(`/api/libraries?type=${encodeURIComponent(type)}`, { cache: 'no-store' });
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -239,9 +240,11 @@
         } catch (error) {
             console.warn(`Could not load ${type} libraries:`, error);
             libraryLists[type] = [];
+            loaded = false;
         }
         renderMenu(type);
         announceState();
+        return loaded;
     }
 
     function decorate(type) {
