@@ -20,7 +20,7 @@
     let pageTitle = null;
     let liveAvailable = false;
     let livePanel = null;
-    const live = { open: false, query: '', offset: 0, hasMore: false, loading: false, total: 0, generation: 0, observer: null, controller: null, progressTimer: null };
+    const live = { open: false, query: '', offset: 0, hasMore: false, loading: false, total: 0, generation: 0, observer: null, controller: null, progressTimer: null, searchTimer: null };
 
     function el(tag, className, text) {
         const node = document.createElement(tag);
@@ -258,10 +258,14 @@
         search.className = 'jf-live-search';
         search.placeholder = 'Search channels';
         search.setAttribute('aria-label', 'Search channels');
-        let timer = null;
         search.addEventListener('input', () => {
-            clearTimeout(timer);
-            timer = setTimeout(() => { live.query = search.value.trim(); resetLive(); }, 180);
+            clearTimeout(live.searchTimer);
+            live.searchTimer = setTimeout(() => {
+                live.searchTimer = null;
+                if (!live.open) return;
+                live.query = search.value.trim();
+                resetLive();
+            }, 180);
         });
         bar.append(heading, count, search);
 
@@ -298,6 +302,12 @@
             count.textContent = `${live.total.toLocaleString()} ${live.total === 1 ? 'channel' : 'channels'}`;
             empty.hidden = live.total > 0;
             empty.textContent = live.query ? `No channels match “${live.query}”.` : 'No channels are available.';
+            // IntersectionObserver does not fire again while the sentinel stays
+            // intersecting. Fill a large viewport until scrolling is needed.
+            if (live.hasMore && livePanel._parts.sentinel.getBoundingClientRect().top <
+                window.innerHeight + 600) {
+                setTimeout(() => loadLivePage(generation), 0);
+            }
         } catch (error) {
             if (generation !== live.generation || !live.open || error.name === 'AbortError') return;
             console.warn('Could not load Live TV channels:', error);
@@ -355,6 +365,8 @@
     function closeLive() {
         if (!live.open) return;
         live.open = false;
+        clearTimeout(live.searchTimer);
+        live.searchTimer = null;
         live.generation += 1;
         if (live.controller) live.controller.abort();
         live.controller = null;
