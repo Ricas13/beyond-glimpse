@@ -108,6 +108,19 @@ class LiveTvChannelTests(unittest.TestCase):
         self.assertTrue(sent["available"])
         self.assertEqual(sent["total"], 1)
 
+    def test_access_revocation_clears_previous_public_channel_list(self):
+        self.use(FakeJellyfin([raw(1, "Private", "1")]))
+        self.assertTrue(self.call()["payload"]["available"])
+        service.CatalogueHandler.channel_cache["fetched_at"] = 0
+        response = requests.Response()
+        response.status_code = 403
+        self.use(FakeJellyfin(error=requests.HTTPError("forbidden", response=response)))
+        sent = self.call()
+        self.assertEqual(sent["status"], 200)
+        self.assertFalse(sent["payload"]["available"])
+        self.assertEqual(sent["payload"]["channels"], [])
+        self.assertEqual(service.CatalogueHandler.channel_cache["channels"], [])
+
     def test_list_is_cached_between_calls(self):
         fake = FakeJellyfin([raw(1, "A", "1")])
         self.use(fake)
