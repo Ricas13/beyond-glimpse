@@ -49,8 +49,8 @@ class JellyfinUiAssetTests(unittest.TestCase):
 
     def test_service_worker_precaches_the_assets(self):
         sw = (ROOT / "web" / "sw.js").read_text(encoding="utf-8")
-        self.assertIn("/jellyfin-ui.js?v=1", sw)
-        self.assertIn("/jellyfin-ui.css?v=1", sw)
+        self.assertIn("/jellyfin-ui.js?v=2", sw)
+        self.assertIn("/jellyfin-ui.css?v=2", sw)
 
 
 if __name__ == "__main__":

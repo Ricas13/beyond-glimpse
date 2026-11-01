@@ -543,3 +543,115 @@ html.jf-ui .bg-episode-status { color: var(--jf-text-dim); }
 html.jf-ui .date-section { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 0.6rem; }
 html.jf-ui .date-section .modal-section-title { font-size: 1rem; color: var(--jf-text-dim); margin: 0; }
 html.jf-ui .date-section .modal-section-title::after { content: ":"; }
+
+/* ======================= Live TV channels ======================= */
+html.jf-ui .jf-ico-live { --jf-ico: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M21 6h-7.59l3.29-3.29L16 2l-4 4-4-4-.71.71L10.59 6H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm0 14H3V8h18v12zM9 10v8l7-4z'/%3E%3C/svg%3E"); }
+
+/* Entry points: hidden until the server reports channels. */
+html.jf-ui .jf-livetab { display: none; cursor: pointer; }
+html.jf-ui.jf-live-available .mobile-menu .jf-livetab {
+    display: block;
+    width: 100%;
+    padding: 12px;
+    text-align: left;
+    text-transform: uppercase;
+    font-size: 0.85rem;
+    color: var(--jf-text-dim);
+}
+html.jf-ui .mobile-menu .jf-livetab.active { color: var(--jf-text); box-shadow: inset 3px 0 0 var(--jf-accent); background: var(--jf-hover); }
+@media screen and (min-width: 769px) and (max-width: 1099px) {
+    html.jf-ui.jf-live-available .header-content > .tabs > .jf-livetab {
+        display: flex;
+        order: 5;
+        align-items: center;
+        height: var(--jf-tabs-h);
+        padding: 0 1.25rem;
+        text-transform: uppercase;
+        letter-spacing: 0.02em;
+        font-size: 0.85rem;
+        font-weight: 500;
+        color: var(--jf-text-dim);
+    }
+    html.jf-ui .header-content > .tabs > .jf-livetab:hover { color: var(--jf-text); background: var(--jf-hover); }
+    html.jf-ui .header-content > .tabs > .jf-livetab.active { color: var(--jf-text); font-weight: 600; box-shadow: inset 0 -3px 0 var(--jf-accent); }
+}
+/* While Live TV is open the library tabs must not look selected. */
+html.jf-ui.jf-live-open .header .tab.active,
+html.jf-ui.jf-live-open .mobile-menu .tab.active {
+    box-shadow: none;
+    color: var(--jf-text-dim) !important;
+    background: transparent !important;
+}
+
+html.jf-ui .jf-live {
+    position: fixed;
+    top: var(--mobile-header-height);
+    right: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 90;
+    overflow-y: auto;
+    background: var(--jf-bg);
+    padding: 1.25rem 1.5rem 3rem;
+}
+html.jf-ui .jf-live[hidden] { display: none; }
+@media screen and (min-width: 769px) { html.jf-ui .jf-live { top: var(--header-height); } }
+@media screen and (min-width: 1100px) { html.jf-ui .jf-live { left: var(--jf-drawer-w); } }
+html.jf-ui .jf-live-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 0.75rem 1rem; }
+html.jf-ui .jf-live-title { font-size: 1.4rem; }
+html.jf-ui .jf-live-count { color: var(--jf-text-dim); font-size: 0.9rem; margin-right: auto; }
+html.jf-ui .jf-live-search {
+    width: min(22rem, 100%);
+    padding: 0.55rem 0.8rem;
+    border: 0;
+    border-radius: 4px;
+    background: var(--jf-surface-2);
+    color: var(--jf-text);
+    font: inherit;
+    font-size: 0.95rem;
+    outline: none;
+}
+html.jf-ui .jf-live-search:focus { background: #333; box-shadow: 0 0 0 2px var(--jf-accent); }
+html.jf-ui .jf-live-note { margin: 0.5rem 0 0; font-size: 0.8rem; color: var(--jf-text-dim); }
+html.jf-ui .jf-live-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr));
+    gap: 0.9rem;
+    margin-top: 1.1rem;
+}
+html.jf-ui .jf-live-empty { padding: 3rem 0; text-align: center; color: var(--jf-text-dim); }
+html.jf-ui .jf-live-sentinel { height: 1px; }
+html.jf-ui .jf-channel {
+    display: flex;
+    gap: 0.9rem;
+    padding: 0.8rem;
+    border-radius: 4px;
+    background: var(--jf-surface);
+    min-width: 0;
+}
+html.jf-ui .jf-channel-logo {
+    position: relative;
+    flex: 0 0 4.5rem;
+    height: 4.5rem;
+    border-radius: 4px;
+    background: linear-gradient(160deg, #2c2c2c, #1b1b1b);
+    display: grid;
+    place-items: center;
+    overflow: hidden;
+    color: var(--jf-text-dim);
+    font-size: 1.3rem;
+    font-weight: 300;
+}
+html.jf-ui .jf-channel-logo img { position: absolute; inset: 0.3rem; width: calc(100% - 0.6rem); height: calc(100% - 0.6rem); object-fit: contain; }
+html.jf-ui .jf-channel-info { min-width: 0; flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 0.15rem; }
+html.jf-ui .jf-channel-head { display: flex; align-items: baseline; gap: 0.5rem; min-width: 0; }
+html.jf-ui .jf-channel-number { color: var(--jf-accent); font-size: 0.85rem; font-weight: 600; flex: none; }
+html.jf-ui .jf-channel-name { font-size: 1rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+html.jf-ui .jf-channel-now { font-size: 0.88rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+html.jf-ui .jf-channel-time { font-size: 0.78rem; color: var(--jf-text-dim); }
+html.jf-ui .jf-dim { color: var(--jf-text-dim); }
+html.jf-ui .jf-channel-bar { margin-top: 0.3rem; height: 0.2rem; border-radius: 2px; background: rgba(255, 255, 255, 0.2); overflow: hidden; }
+html.jf-ui .jf-channel-bar i { display: block; height: 100%; background: var(--jf-accent); }
+/* Library-only controls make no sense on the channel list. */
+html.jf-ui.jf-live-open .header .sort-toggle,
+html.jf-ui.jf-live-open .header .search-box { visibility: hidden; }

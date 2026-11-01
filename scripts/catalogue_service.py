@@ -25,6 +25,8 @@ PORT = int(os.environ.get("CATALOGUE_API_PORT", "8091"))
 MAX_PAGE_SIZE = 120
 DEFAULT_PAGE_SIZE = 60
 DETAIL_TTL_SECONDS = max(300, int(os.environ.get("DETAIL_CACHE_TTL_SECONDS", str(7 * 86400))))
+CHANNEL_CACHE_TTL_SECONDS = max(15, int(os.environ.get("CHANNEL_CACHE_TTL_SECONDS", "60")))
+MAX_CHANNELS = 20000
 EPISODE_CACHE_TTL_SECONDS = max(300, int(os.environ.get("EPISODE_CACHE_TTL_SECONDS", str(6 * 3600))))
 POSTER_WIDTH = max(64, min(1000, int(os.environ.get("POSTER_PROXY_MAX_WIDTH", "320"))))
 POSTER_QUALITY = max(30, min(95, int(os.environ.get("POSTER_PROXY_QUALITY", "72"))))
@@ -37,6 +39,39 @@ def int_or_none(value):
         return int(value) if value not in (None, "") else None
     except (TypeError, ValueError):
         return None
+
+
+def parse_channel_number(value):
+    """Sort key for channel numbers such as '7', '12.1' or ''. Numbered first."""
+    text = str(value or "").strip()
+    try:
+        return (0, float(text), text)
+    except ValueError:
+        return (1, 0.0, text.casefold())
+
+
+def channel_from_api(item):
+    channel_id = str(item.get("Id") or "")
+    if not channel_id:
+        return None
+    program = item.get("CurrentProgram") or {}
+    now = None
+    if program.get("Name"):
+        now = {
+            "title": str(program.get("Name") or ""),
+            "episode": str(program.get("EpisodeTitle") or ""),
+            "start": str(program.get("StartDate") or ""),
+            "end": str(program.get("EndDate") or ""),
+        }
+    logo_tag = str((item.get("ImageTags") or {}).get("Primary") or "")
+    return {
+        "id": channel_id,
+        "name": str(item.get("Name") or ""),
+        "number": str(item.get("Number") or item.get("ChannelNumber") or ""),
+        "kind": "radio" if str(item.get("ChannelType") or "").casefold() == "radio" else "tv",
+        "logoTag": logo_tag,
+        "now": now,
+    }
 
 
 def season_from_api(item):
@@ -228,6 +263,8 @@ class CatalogueHandler(BaseHTTPRequestHandler):
     server_version = "BeyondGlimpseCatalogue/2"
     jellyfin = None
     library_cache = {"fetched_at": 0, "items": []}
+    channel_cache = {"fetched_at": 0, "channels": [], "available": False}
+    channel_lock = threading.Lock()
 
     def log_message(self, fmt, *args):
         print(f"catalogue-api: {self.address_string()} - {fmt % args}", flush=True)
@@ -262,6 +299,8 @@ class CatalogueHandler(BaseHTTPRequestHandler):
                 return self.handle_items(parse_qs(parsed.query))
             if parsed.path == "/api/genres":
                 return self.handle_genres(parse_qs(parsed.query))
+            if parsed.path == "/api/channels":
+                return self.handle_channels(parse_qs(parsed.query))
             if parsed.path == "/api/libraries":
                 return self.handle_libraries(parse_qs(parsed.query))
             if parsed.path.startswith("/api/item/"):
@@ -273,6 +312,8 @@ class CatalogueHandler(BaseHTTPRequestHandler):
                     series_id = suffix[:-len("/episodes")]
                     return self.handle_episodes(series_id, parse_qs(parsed.query))
                 return self.handle_item(suffix)
+            if parsed.path.startswith("/internal/channel-logo/"):
+                return self.handle_channel_logo(parsed.path)
             if parsed.path.startswith("/internal/poster/"):
                 return self.handle_poster(parsed.path)
             return self.send_json(404, {"error": "not found"})
@@ -714,6 +755,126 @@ class CatalogueHandler(BaseHTTPRequestHandler):
                 raise
         finally:
             connection.close()
+
+    @classmethod
+    def load_channels(cls):
+        """Live TV channels from Jellyfin, cached briefly. Never raises.
+
+        A server without Live TV (or a user without access) simply reports
+        available=False so the UI can hide the section. A failed refresh keeps
+        serving the last good list.
+        """
+        if cls.jellyfin is None:
+            return cls.channel_cache
+        now = int(time.time())
+        with cls.channel_lock:
+            cache = cls.channel_cache
+            if now - int(cache["fetched_at"]) < CHANNEL_CACHE_TTL_SECONDS:
+                return cache
+            try:
+                connection = open_db(initialize=False)
+                try:
+                    user_id = cls.jellyfin.resolve_user_id(connection)
+                finally:
+                    connection.close()
+                channels, offset = [], 0
+                while len(channels) < MAX_CHANNELS:
+                    data = cls.jellyfin.get_json(
+                        "/LiveTv/Channels",
+                        params={
+                            "UserId": user_id,
+                            "AddCurrentProgram": "true",
+                            "EnableImages": "true",
+                            "ImageTypeLimit": 1,
+                            "EnableImageTypes": "Primary",
+                            "EnableUserData": "false",
+                            "StartIndex": offset,
+                            "Limit": 1000,
+                        },
+                    )
+                    items = data.get("Items") or []
+                    if not items:
+                        break
+                    for item in items:
+                        channel = channel_from_api(item)
+                        if channel is not None:
+                            channels.append(channel)
+                    offset += len(items)
+                    total = data.get("TotalRecordCount")
+                    if isinstance(total, int) and offset >= total:
+                        break
+                channels.sort(key=lambda c: (parse_channel_number(c["number"]), c["name"].casefold()))
+                cls.channel_cache = {"fetched_at": now, "channels": channels, "available": bool(channels)}
+            except (requests.RequestException, RuntimeError, ValueError, TypeError, AttributeError) as exc:
+                print(f"catalogue-api live TV channels unavailable: {exc}", flush=True)
+                # Keep any previous good list; otherwise remember the miss briefly.
+                cls.channel_cache = {
+                    "fetched_at": now,
+                    "channels": cache["channels"],
+                    "available": cache["available"],
+                }
+            return cls.channel_cache
+
+    def handle_channels(self, query):
+        try:
+            limit = max(1, min(MAX_PAGE_SIZE, int((query.get("limit") or [DEFAULT_PAGE_SIZE])[0])))
+            offset = max(0, min(1_000_000, int((query.get("offset") or [0])[0])))
+        except (TypeError, ValueError):
+            return self.send_json(400, {"error": "invalid pagination"})
+        search = ((query.get("q") or [""])[0] or "").strip()[:160].casefold()
+        kind = ((query.get("kind") or [""])[0] or "").strip().lower()
+
+        cache = self.load_channels()
+        channels = cache["channels"]
+        if kind in {"tv", "radio"}:
+            channels = [c for c in channels if c["kind"] == kind]
+        if search:
+            channels = [c for c in channels if search in c["name"].casefold() or search in c["number"].casefold()]
+        page = channels[offset:offset + limit]
+        has_more = offset + len(page) < len(channels)
+        return self.send_json(
+            200,
+            {
+                "available": bool(cache["available"]),
+                "total": len(channels),
+                "offset": offset,
+                "limit": limit,
+                "hasMore": has_more,
+                "nextOffset": offset + len(page) if has_more else None,
+                "channels": [
+                    {
+                        "id": c["id"],
+                        "name": c["name"],
+                        "number": c["number"],
+                        "kind": c["kind"],
+                        "logo": f"/channel-logo/{c['id']}/{c['logoTag']}.png" if c["logoTag"] else "",
+                        "now": c["now"],
+                    }
+                    for c in page
+                ],
+            },
+            cache_control="private, max-age=15",
+        )
+
+    def handle_channel_logo(self, path):
+        suffix = path[len("/internal/channel-logo/"):]
+        if not suffix.endswith(".png") or "/" not in suffix:
+            return self.send_json(404, {"error": "logo not found"})
+        channel_id, tag_file = suffix.split("/", 1)
+        tag = tag_file[:-4]
+        if not channel_id or not tag or len(channel_id) > 128 or len(tag) > 256:
+            return self.send_json(404, {"error": "logo not found"})
+        # Only logos of channels Jellyfin actually listed (with the exact tag).
+        known = {c["id"]: c["logoTag"] for c in self.channel_cache["channels"]}
+        if known.get(channel_id) != tag:
+            return self.send_json(404, {"error": "logo not found"})
+        if self.jellyfin is None:
+            return self.send_json(503, {"error": "Jellyfin is not configured"})
+        try:
+            body, content_type = self.jellyfin.fetch_poster(channel_id, tag, 240, 90, image_format="png")
+        except requests.RequestException:
+            return self.send_json(502, {"error": "logo upstream unavailable"})
+        return self.send_bytes(200, body, content_type)
 
     def handle_poster(self, path):
         suffix = path[len("/internal/poster/"):]
