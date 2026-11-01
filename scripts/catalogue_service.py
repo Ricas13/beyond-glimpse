@@ -138,8 +138,11 @@ def present_season_ids(client, user_id, season_ids, workers=8):
                 # An invalid season id or a failed/malformed response is unknown,
                 # not evidence that the season has no available episodes.
                 return season_id, True
-            if len(items) < 5:
+            if not items:
                 return season_id, False
+            # A Jellyfin server may cap pages below the requested Limit.
+            # Keep looking from the returned row count rather than assuming a
+            # short page means the end of the season.
             offset += len(items)
         return season_id, True
 
