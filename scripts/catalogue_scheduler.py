@@ -22,8 +22,11 @@ def run_once():
 
 
 def main():
-    if os.environ.get("PRIMARY_SERVER", "jellyfin").strip().lower() != "jellyfin":
-        print("Catalogue scheduler disabled: PRIMARY_SERVER is not jellyfin", flush=True)
+    # PRIMARY_SERVER is resolved in a shell variable by the entrypoint and is
+    # not exported, so gate on the Jellyfin credentials instead. This also keeps
+    # Jellyfin fresh when it is configured as a non-primary server.
+    if not (os.environ.get("JELLYFIN_URL") and os.environ.get("JELLYFIN_TOKEN")):
+        print("Catalogue scheduler disabled: Jellyfin is not configured", flush=True)
         return 0
 
     interval = max(60, int(os.environ.get("SYNC_INTERVAL_SECONDS", DEFAULT_INTERVAL)))

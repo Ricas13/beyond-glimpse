@@ -68,13 +68,33 @@ def persist_libraries(connection, libraries):
     ], ensure_ascii=False, separators=(",", ":")))
 
 
-def deletion_guard(connection, removed_ids, *, stage):
+MIN_GUARDED_LIBRARY_SIZE = 20
+
+
+def deletion_guard(connection, removed_ids, *, stage, active_library_ids=None):
+    """Refuse suspiciously large deletions.
+
+    Items belonging to libraries that are no longer eligible (excluded or
+    removed from Jellyfin) are an expected removal and are not counted against
+    the limits. Per-library limits only apply to libraries large enough for a
+    percentage to be meaningful, so deleting one item from a tiny library is
+    never blocked.
+    """
     removed = set(removed_ids)
     if not removed:
         return
     existing = connection.execute("SELECT id,library_id FROM items").fetchall()
     if not existing:
         return
+    if active_library_ids is not None:
+        active = {str(value) for value in active_library_ids}
+        if not active:
+            raise RuntimeError(f"{stage}: refusing to delete the catalogue; no eligible libraries were returned")
+        existing = [row for row in existing if row["library_id"] in active]
+        kept_ids = {row["id"] for row in existing}
+        removed = removed & kept_ids
+        if not removed or not existing:
+            return
     limit = float(os.environ.get("RECONCILE_MAX_DELETE_FRACTION", "0.35"))
     if not 0 <= limit <= 1:
         raise ValueError("RECONCILE_MAX_DELETE_FRACTION must be between 0 and 1")
@@ -87,6 +107,8 @@ def deletion_guard(connection, removed_ids, *, stage):
         if row["id"] in removed:
             removed_counts[library_id] = removed_counts.get(library_id, 0) + 1
     for library_id, count in counts.items():
+        if count < MIN_GUARDED_LIBRARY_SIZE:
+            continue
         if removed_counts.get(library_id, 0) / count > limit:
             raise RuntimeError(f"{stage}: refusing suspicious deletion from library {library_id}")
 
@@ -224,7 +246,10 @@ def bootstrap(client, connection, *, reason="initial bootstrap"):
             "SELECT id FROM items WHERE generation <> ?", (generation,)
         )
     ]
-    deletion_guard(connection, stale_ids, stage="bootstrap")
+    deletion_guard(
+        connection, stale_ids, stage="bootstrap",
+        active_library_ids=[lib["id"] for lib in libraries],
+    )
     connection.execute("BEGIN IMMEDIATE")
     try:
         removed = delete_items(connection, stale_ids)
@@ -376,7 +401,10 @@ def reconcile(client, connection, user_id, libraries, generation):
         if existing[item_id] != seen[item_id]
     }
 
-    deletion_guard(connection, deleted, stage="reconciliation")
+    deletion_guard(
+        connection, deleted, stage="reconciliation",
+        active_library_ids=[lib["id"] for lib in libraries],
+    )
 
     refresh_ids = sorted(new | moved)
     refreshed = refresh_inventory_items(
