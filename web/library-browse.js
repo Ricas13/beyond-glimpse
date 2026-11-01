@@ -205,24 +205,26 @@
     }
 
     function selectLibrary(type, id, name) {
-        if (selected[type] === id) {
-            closeMenus();
-            return;
+        const changed = selected[type] !== id;
+        if (changed) {
+            selected[type] = id;
+            updateControl(type, name);
+            announceState();
         }
-        selected[type] = id;
-        updateControl(type, name);
         closeMenus();
-        announceState();
 
         const targetTab = tabType(type);
         const activeTab = document.querySelector('.tab.active')?.dataset.content;
         if (activeTab !== targetTab && typeof switchTab === 'function') {
+            // Navigate even when the same library is already selected for the
+            // other tab; skipping this used to leave the user on the wrong page.
             switchTab(targetTab);
-        } else if (typeof filterAndSortMedia === 'function') {
+        } else if (changed && typeof filterAndSortMedia === 'function') {
             filterAndSortMedia(document.querySelector('.search-input')?.value || '');
         }
         // A library selection refreshes only its own lightweight SQL result set.
-        if (typeof window.__beyondGlimpseRefreshGenres === 'function') {
+        if ((changed || activeTab !== targetTab) &&
+            typeof window.__beyondGlimpseRefreshGenres === 'function') {
             window.__beyondGlimpseRefreshGenres();
         }
     }

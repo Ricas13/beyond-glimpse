@@ -5,10 +5,10 @@
 // textContent; nothing from the API is parsed as HTML.
 
 (() => {
-    const isJellyfin = document.documentElement.classList.contains('jf-ui') ||
-        String(document.title || '').toLowerCase().includes('jellyfin');
-    if (!isJellyfin || window.__beyondGlimpseJellyfinUi) return;
-    document.documentElement.classList.add('jf-ui');
+    // The entrypoint marks only Jellyfin pages; a custom Plex/Emby title
+    // containing "Jellyfin" must never activate this theme.
+    if (!document.documentElement.classList.contains('jf-ui') ||
+        window.__beyondGlimpseJellyfinUi) return;
     window.__beyondGlimpseJellyfinUi = true;
 
     const TYPES = [

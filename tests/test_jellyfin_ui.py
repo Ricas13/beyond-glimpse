@@ -36,6 +36,17 @@ class JellyfinUiAssetTests(unittest.TestCase):
         self.assertIn('class="jf-ui"', theme)
         self.assertNotIn("jf-ui", source[source.index("apply_emby_theme()"):])
 
+    def test_theme_activation_requires_entrypoint_class(self):
+        js = (ROOT / "web" / "jellyfin-ui.js").read_text(encoding="utf-8")
+        self.assertIn("document.documentElement.classList.contains('jf-ui')", js)
+        self.assertNotIn("String(document.title", js)
+        self.assertNotIn("document.documentElement.classList.add('jf-ui')", js)
+
+    def test_same_library_selection_can_navigate_from_other_tab(self):
+        js = (ROOT / "web" / "library-browse.js").read_text(encoding="utf-8")
+        self.assertIn("const changed = selected[type] !== id;", js)
+        self.assertIn("if (activeTab !== targetTab && typeof switchTab", js)
+
     def test_service_worker_precaches_the_assets(self):
         sw = (ROOT / "web" / "sw.js").read_text(encoding="utf-8")
         self.assertIn("/jellyfin-ui.js?v=1", sw)
