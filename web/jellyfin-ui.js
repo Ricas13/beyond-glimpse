@@ -149,23 +149,24 @@
         }
     }
 
-    // While the first index runs, library counts grow; refresh the drawer when the
-    // indexed item total changes (cheap status call, stops once indexing is done).
-    let lastIndexed = -1;
+    // Refresh while indexing, even if the grand total has not changed (e.g.
+    // items moved between libraries, or a previous list request failed).
+    // Schedule only after this invocation completes so requests never overlap.
     async function pollCounts() {
         let settled = false;
+        const controller = new AbortController();
+        const deadline = setTimeout(() => controller.abort(), 10000);
         try {
-            const response = await fetch('/api/status', { cache: 'no-store' });
+            const response = await fetch('/api/status', { cache: 'no-store', signal: controller.signal });
             if (response.ok) {
                 const status = await response.json();
-                const indexed = Number(status.movies || 0) + Number(status.tvShows || 0);
-                if (indexed !== lastIndexed && typeof window.__beyondGlimpseReloadLibraries === 'function') {
-                    lastIndexed = indexed;
+                if (typeof window.__beyondGlimpseReloadLibraries === 'function') {
                     await window.__beyondGlimpseReloadLibraries();
                 }
                 settled = Boolean(status.bootstrapComplete) && status.state !== 'bootstrap';
             }
-        } catch (_) { /* the API may still be starting */ }
+        } catch (_) { /* the API may still be starting; retry later */ }
+        finally { clearTimeout(deadline); }
         if (!settled) setTimeout(pollCounts, 8000);
     }
 
