@@ -253,7 +253,7 @@
         item.setAttribute('aria-checked', checked ? 'true' : 'false');
         item.append(el('span', 'jf-menu-check', checked ? '✓' : ''), el('span', 'jf-menu-label', label));
         if (count != null) item.append(el('span', 'jf-menu-count', Number(count).toLocaleString()));
-        item.addEventListener('click', () => { closeMenu(); onClick(); });
+        item.addEventListener('click', () => { closeMenu(); onClick(); updateToolbar(); });
         return item;
     }
 
@@ -311,6 +311,7 @@
             clear.addEventListener('click', event => {
                 event.stopPropagation();
                 if (typeof setGenreFilter === 'function') setGenreFilter('all');
+                updateToolbar();
             });
             chip.appendChild(clear);
         }
@@ -330,9 +331,20 @@
         );
         content.appendChild(toolbar);
         document.addEventListener('click', closeMenu);
-        document.addEventListener('keydown', event => { if (event.key === 'Escape') closeMenu(); });
+        document.addEventListener('keydown', event => {
+            if (event.key === 'Escape' && openMenu) {
+                const button = openMenu.button;
+                closeMenu();
+                button.focus();
+            }
+        });
         window.addEventListener('resize', closeMenu);
-        // The app toggles this class whenever the genre filter changes or resets.
+        // Tab switches can clear currentGenre without changing the body class
+        // (for example after Date sort removed sort-by-genre). Update after the
+        // existing tab click handler has run, even when no class changes.
+        document.addEventListener('click', event => {
+            if (event.target.closest('.tab')) queueMicrotask(updateToolbar);
+        });
         new MutationObserver(updateToolbar).observe(document.body, { attributes: true, attributeFilter: ['class'] });
         updateToolbar();
     }
@@ -497,6 +509,7 @@
 
     function openLive() {
         if (!liveAvailable || live.open) return;
+        closeMenu();
         if (!livePanel) buildLivePanel();
         live.open = true;
         live.query = '';
