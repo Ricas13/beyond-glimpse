@@ -618,7 +618,7 @@
         // Picking any library/tab leaves Live TV; Escape closes it too.
         document.addEventListener('click', event => {
             if (!live.open) return;
-            if (event.target.closest('.header .tab, .mobile-menu .tab, .jf-nav-item:not([data-nav="live"])')) closeLive();
+            if (event.target.closest('.header .tab, .mobile-menu .tab, .jf-mlib, .jf-nav-item:not([data-nav="live"])')) closeLive();
         }, true);
         document.addEventListener('keydown', event => {
             if (event.key === 'Escape' && live.open && !document.querySelector('.modal-overlay.active')) closeLive();
