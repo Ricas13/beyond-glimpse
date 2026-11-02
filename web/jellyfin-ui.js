@@ -103,6 +103,13 @@
         const current = activeTab();
         scroll.replaceChildren();
 
+        // Live TV channels sit at the very top of the drawer.
+        if (liveAvailable) {
+            const item = navItem('jf-ico-live', 'Channels', null, openLive, 'live');
+            item.classList.toggle('active', live.open);
+            scroll.appendChild(item);
+        }
+
         for (const entry of TYPES) {
             const list = state.libraryLists[entry.type] || [];
             const total = list.reduce((sum, library) => sum + Number(library.count || 0), 0);
@@ -129,12 +136,6 @@
             }
         }
         renderMobileLibraries(libraries, current, state);
-        if (liveAvailable) {
-            scroll.appendChild(el('div', 'jf-nav-heading', 'Live TV'));
-            const item = navItem('jf-ico-live', 'Channels', null, openLive, 'live');
-            item.classList.toggle('active', live.open);
-            scroll.appendChild(item);
-        }
         updateTitle();
     }
 
@@ -623,7 +624,7 @@
                 openLive();
                 document.querySelector('.mobile-menu')?.classList.remove('open');
             });
-            mobileTabs.appendChild(tab);
+            mobileTabs.prepend(tab);
         }
     }
 

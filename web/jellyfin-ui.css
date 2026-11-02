@@ -548,7 +548,7 @@ html.jf-ui .mobile-menu .jf-livetab.active { color: var(--jf-text); box-shadow: 
 @media screen and (min-width: 769px) and (max-width: 1099px) {
     html.jf-ui.jf-live-available .header-content > .tabs > .jf-livetab {
         display: flex;
-        order: 5;
+        order: 4; /* first in the tab row: after the row break, before Movies */
         align-items: center;
         height: var(--jf-tabs-h);
         padding: 0 1.25rem;

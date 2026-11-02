@@ -51,8 +51,8 @@ class JellyfinUiAssetTests(unittest.TestCase):
 
     def test_service_worker_precaches_the_assets(self):
         sw = (ROOT / "web" / "sw.js").read_text(encoding="utf-8")
-        self.assertIn("/jellyfin-ui.js?v=6", sw)
-        self.assertIn("/jellyfin-ui.css?v=4", sw)
+        self.assertIn("/jellyfin-ui.js?v=7", sw)
+        self.assertIn("/jellyfin-ui.css?v=5", sw)
 
     def test_sort_query_honours_the_selected_direction(self):
         runtime = (ROOT / "web" / "large-library.js").read_text(encoding="utf-8")
@@ -125,6 +125,17 @@ class JellyfinUiAssetTests(unittest.TestCase):
         self.assertIn("lastCardActivator = mediaItem", runtime)
         self.assertIn("lastCardActivator.isConnected", runtime)
         self.assertIn("document.querySelector('.modal-close')?.focus()", runtime)
+
+    def test_live_tv_channels_entry_is_first_everywhere(self):
+        source = (ROOT / "web" / "jellyfin-ui.js").read_text(encoding="utf-8")
+        drawer = source[source.index("function renderDrawer"):source.index("function updateTitle")]
+        # Drawer: the Channels item is added before the All Movies / All TV Shows items.
+        self.assertLess(drawer.index("'live'"), drawer.index("for (const entry of TYPES)"))
+        # Phone menu: prepended to the tab list.
+        self.assertIn("mobileTabs.prepend(tab)", source)
+        # Mid-width tab strip: ordered ahead of the library tabs.
+        css = (ROOT / "web" / "jellyfin-ui.css").read_text(encoding="utf-8")
+        self.assertRegex(css, r"\.jf-livetab \{\s*display: flex;\s*order: 4;")
 
 
 if __name__ == "__main__":

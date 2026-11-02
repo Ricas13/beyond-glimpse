@@ -55,9 +55,9 @@ class PrepareWebTests(unittest.TestCase):
             self.assertIn('/library-browse.js?v=5', first)
             self.assertIn('/tv-episodes.js?v=2', first)
             self.assertIn('/startup-status.js?v=3', first)
-            self.assertIn('/jellyfin-ui.js?v=6', first)
-            self.assertEqual(first.count('/jellyfin-ui.css?v=4'), 1)
-            self.assertLess(first.index('/jellyfin-ui.css?v=4'), first.index('</head>'))
+            self.assertIn('/jellyfin-ui.js?v=7', first)
+            self.assertEqual(first.count('/jellyfin-ui.css?v=5'), 1)
+            self.assertLess(first.index('/jellyfin-ui.css?v=5'), first.index('</head>'))
             self.assertNotIn("__beyondGlimpseServerHintShim", first)
             self.assertIn("const title = String(document.title || '').toLowerCase();", runtime)
             self.assertIn("await resetApiQuery", runtime)
@@ -71,8 +71,8 @@ class PrepareWebTests(unittest.TestCase):
             self.assertEqual(second.count('/library-browse.js?v=5'), 1)
             self.assertEqual(second.count('/tv-episodes.js?v=2'), 1)
             self.assertEqual(second.count('/startup-status.js?v=3'), 1)
-            self.assertEqual(second.count('/jellyfin-ui.js?v=6'), 1)
-            self.assertEqual(second.count('/jellyfin-ui.css?v=4'), 1)
+            self.assertEqual(second.count('/jellyfin-ui.js?v=7'), 1)
+            self.assertEqual(second.count('/jellyfin-ui.css?v=5'), 1)
 
     def test_runtime_tags_are_after_literal_body_comment_and_before_real_close(self):
         with tempfile.TemporaryDirectory() as tmp:
