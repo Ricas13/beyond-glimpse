@@ -18,7 +18,6 @@
 
     let drawer = null;
     let pageTitle = null;
-    let liveAvailable = false;
     let livePanel = null;
     const live = { open: false, query: '', offset: 0, hasMore: false, loading: false, total: 0, generation: 0, observer: null, controller: null, progressTimer: null, searchTimer: null };
 
@@ -103,14 +102,12 @@
         const current = activeTab();
         scroll.replaceChildren();
 
-        for (const entry of TYPES) {
-            const list = state.libraryLists[entry.type] || [];
-            const total = list.reduce((sum, library) => sum + Number(library.count || 0), 0);
-            const item = navItem(entry.icon, `All ${entry.label}`, list.length ? total : null,
-                () => showTab(entry.tab), `all-${entry.tab}`);
-            item.classList.toggle('active', !live.open && current === entry.tab && !state.selected[entry.type]);
-            scroll.appendChild(item);
-        }
+        // Navigation is always available in the Jellyfin skin. If Jellyfin
+        // has no accessible channels, opening the guide explains that state
+        // instead of silently removing the entry from the drawer.
+        const channelItem = navItem('jf-ico-live', 'Channels', null, openLive, 'live');
+        channelItem.classList.toggle('active', live.open);
+        scroll.appendChild(channelItem);
 
         const libraries = TYPES.flatMap(entry =>
             (state.libraryLists[entry.type] || []).map(library => ({ ...library, entry })))
@@ -118,23 +115,24 @@
         if (libraries.length) {
             scroll.appendChild(el('div', 'jf-nav-heading', 'Libraries'));
             for (const library of libraries) {
+                const isSelected = !live.open && current === library.entry.tab &&
+                    state.selected[library.entry.type] === library.id;
                 const item = navItem(library.entry.icon, library.name, library.count, () => {
                     if (typeof window.__beyondGlimpseSelectLibrary === 'function') {
-                        window.__beyondGlimpseSelectLibrary(library.entry.type, library.id, library.name);
+                        // With the two "All" drawer entries removed, a second
+                        // click on the selected library restores the full list.
+                        window.__beyondGlimpseSelectLibrary(
+                            library.entry.type, isSelected ? '' : library.id,
+                            isSelected ? '' : library.name
+                        );
                     }
                 }, `lib-${library.id}`);
-                item.classList.toggle('active', !live.open &&
-                    current === library.entry.tab && state.selected[library.entry.type] === library.id);
+                item.classList.toggle('active', isSelected);
+                if (isSelected) item.title = `Show all ${library.entry.label.toLowerCase()}`;
                 scroll.appendChild(item);
             }
         }
         renderMobileLibraries(libraries, current, state);
-        if (liveAvailable) {
-            scroll.appendChild(el('div', 'jf-nav-heading', 'Live TV'));
-            const item = navItem('jf-ico-live', 'Channels', null, openLive, 'live');
-            item.classList.toggle('active', live.open);
-            scroll.appendChild(item);
-        }
         updateTitle();
     }
 
@@ -167,8 +165,13 @@
             item.append(el('span', `jf-ico ${library.entry.icon}`), el('span', 'jf-mlib-name', library.name),
                 el('span', 'jf-mlib-count', Number(library.count || 0).toLocaleString()));
             item.addEventListener('click', () => {
+                const selectedHere = !live.open && current === library.entry.tab &&
+                    state.selected[library.entry.type] === library.id;
                 if (typeof window.__beyondGlimpseSelectLibrary === 'function') {
-                    window.__beyondGlimpseSelectLibrary(library.entry.type, library.id, library.name);
+                    window.__beyondGlimpseSelectLibrary(
+                        library.entry.type, selectedHere ? '' : library.id,
+                        selectedHere ? '' : library.name
+                    );
                 }
                 if (live.open) closeLive();
                 menu.classList.remove('open');
@@ -408,7 +411,7 @@
 
     // ---------------------------------------------------------------- Live TV
     // Browse-only list of Jellyfin Live TV channels with what is on now. The
-    // section stays hidden unless /api/channels reports channels are available.
+    // navigation stays visible even when the configured user has no channels.
     const PAGE = 60;
 
     function formatClock(value) {
@@ -523,7 +526,8 @@
             live.total = Number(payload.total || 0);
             count.textContent = `${live.total.toLocaleString()} ${live.total === 1 ? 'channel' : 'channels'}`;
             empty.hidden = live.total > 0;
-            empty.textContent = live.query ? `No channels match “${live.query}”.` : 'No channels are available.';
+            empty.textContent = live.query ? `No channels match “${live.query}”.` :
+                'No Live TV channels are available to the configured Jellyfin user.';
             // IntersectionObserver does not fire again while the sentinel stays
             // intersecting. Fill a large viewport until scrolling is needed.
             if (live.hasMore && livePanel._parts.sentinel.getBoundingClientRect().top <
@@ -565,7 +569,7 @@
     }
 
     function openLive() {
-        if (!liveAvailable || live.open) return;
+        if (live.open) return;
         closeMenu();
         if (!livePanel) buildLivePanel();
         live.open = true;
@@ -623,24 +627,7 @@
                 openLive();
                 document.querySelector('.mobile-menu')?.classList.remove('open');
             });
-            mobileTabs.appendChild(tab);
-        }
-    }
-
-    async function probeLive() {
-        try {
-            const response = await fetch('/api/channels?limit=1', { cache: 'no-store' });
-            if (response.ok) {
-                const payload = await response.json();
-                liveAvailable = Boolean(payload.available) && Number(payload.total || 0) > 0;
-            }
-        } catch (_) { /* Jellyfin or catalogue API may still be starting */ }
-        if (liveAvailable) {
-            document.documentElement.classList.add('jf-live-available');
-            renderDrawer();
-        } else {
-            // A concurrent cold-cache refresh may initially return an empty list.
-            setTimeout(probeLive, 60000);
+            mobileTabs.prepend(tab);
         }
     }
 
@@ -649,7 +636,6 @@
         buildDrawer();
         buildToolbar();
         addLiveEntryPoints();
-        probeLive();
         pollCounts();
 
         // Picking any library/tab leaves Live TV; Escape closes it too.

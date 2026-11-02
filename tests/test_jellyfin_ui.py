@@ -51,8 +51,8 @@ class JellyfinUiAssetTests(unittest.TestCase):
 
     def test_service_worker_precaches_the_assets(self):
         sw = (ROOT / "web" / "sw.js").read_text(encoding="utf-8")
-        self.assertIn("/jellyfin-ui.js?v=6", sw)
-        self.assertIn("/jellyfin-ui.css?v=4", sw)
+        self.assertIn("/jellyfin-ui.js?v=8", sw)
+        self.assertIn("/jellyfin-ui.css?v=6", sw)
 
     def test_sort_query_honours_the_selected_direction(self):
         runtime = (ROOT / "web" / "large-library.js").read_text(encoding="utf-8")
@@ -125,6 +125,28 @@ class JellyfinUiAssetTests(unittest.TestCase):
         self.assertIn("lastCardActivator = mediaItem", runtime)
         self.assertIn("lastCardActivator.isConnected", runtime)
         self.assertIn("document.querySelector('.modal-close')?.focus()", runtime)
+
+    def test_channels_first_without_any_channel_availability_gate(self):
+        source = (ROOT / "web" / "jellyfin-ui.js").read_text(encoding="utf-8")
+        drawer = source[source.index("function renderDrawer"):source.index("function renderMobileLibraries")]
+        self.assertLess(drawer.index("'Channels'"), drawer.index("const libraries ="))
+        self.assertNotIn("`All ${entry.label}`", drawer)
+        self.assertNotIn("liveAvailable", source)
+        self.assertNotIn("probeLive()", source)
+        self.assertIn("if (live.open) return;", source)
+        self.assertIn("mobileTabs.prepend(tab)", source)
+        css = (ROOT / "web" / "jellyfin-ui.css").read_text(encoding="utf-8")
+        self.assertRegex(css, r"\.jf-livetab \{\s*display: flex;\s*order: 4;")
+        self.assertNotIn("jf-live-available", css)
+
+    def test_selected_library_can_toggle_back_to_full_catalogue(self):
+        source = (ROOT / "web" / "jellyfin-ui.js").read_text(encoding="utf-8")
+        self.assertIn("isSelected ? '' : library.id", source)
+        self.assertIn("selectedHere ? '' : library.id", source)
+        self.assertIn("Show all ${library.entry.label.toLowerCase()}", source)
+        # The original library picker retains its explicit All choice for tablets.
+        picker = (ROOT / "web" / "library-browse.js").read_text(encoding="utf-8")
+        self.assertIn("option(type, '', `All ${labelFor(type)}`", picker)
 
 
 if __name__ == "__main__":

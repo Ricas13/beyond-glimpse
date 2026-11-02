@@ -533,9 +533,9 @@ html.jf-ui .date-section .modal-section-title::after { content: ":"; }
 /* ======================= Live TV channels ======================= */
 html.jf-ui .jf-ico-live { --jf-ico: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M21 6h-7.59l3.29-3.29L16 2l-4 4-4-4-.71.71L10.59 6H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm0 14H3V8h18v12zM9 10v8l7-4z'/%3E%3C/svg%3E"); }
 
-/* Entry points: hidden until the server reports channels. */
+/* Live TV navigation is always offered on Jellyfin; the guide shows availability. */
 html.jf-ui .jf-livetab { display: none; cursor: pointer; border: 0; background: transparent; font: inherit; }
-html.jf-ui.jf-live-available .mobile-menu .jf-livetab {
+html.jf-ui .mobile-menu .jf-livetab {
     display: block;
     width: 100%;
     padding: 12px 1.25rem;
@@ -546,9 +546,9 @@ html.jf-ui.jf-live-available .mobile-menu .jf-livetab {
 }
 html.jf-ui .mobile-menu .jf-livetab.active { color: var(--jf-text); box-shadow: inset 3px 0 0 var(--jf-accent); background: var(--jf-hover); }
 @media screen and (min-width: 769px) and (max-width: 1099px) {
-    html.jf-ui.jf-live-available .header-content > .tabs > .jf-livetab {
+    html.jf-ui .header-content > .tabs > .jf-livetab {
         display: flex;
-        order: 5;
+        order: 4; /* first in the tab row: after the row break, before Movies */
         align-items: center;
         height: var(--jf-tabs-h);
         padding: 0 1.25rem;
